@@ -142,7 +142,7 @@ Host client
 # фрагмент — полный файл в build/Dockerfile
 FROM golang:1.26-alpine AS builder
 ADD --checksum=sha256:079f… https://github.com/fatedier/frp/archive/refs/tags/v0.71.1.tar.gz …
-RUN … go get golang.org/x/net@v0.60.0 && go get golang.org/x/crypto@v0.58.0 \
+RUN … go get golang.org/x/net@v0.61.0 && go get golang.org/x/crypto@v0.58.0 \
  && go mod tidy && go build -tags noweb -trimpath -ldflags="-s -w" -o /out/frpc ./cmd/frpc …
 
 FROM alpine:3.24 AS runtime-files   # только CA + tzdata + passwd/group
@@ -314,7 +314,7 @@ fallbackTimeoutMs = 1000
 | XTCP-тюнинг | `keepTunnelOpen = true`; фолбэк через 1000 мс |
 | Формат конфигов | TOML (INI устарел с v0.52) |
 | Образы | Свои `frp-local:frpc` / `frp-local:frps` — сборка из исходников v0.71.1, `scratch`-финал, non-root, noweb |
-| Оверлей безопасности | `go get x/net@v0.60.0` + `x/crypto@v0.58.0` + `apk upgrade` — закрывает 4×High |
+| Оверлей безопасности | `go get x/net@v0.61.0` + `x/crypto@v0.58.0` + `apk upgrade` — закрывает 4×High |
 | Шифрование канала | TLS frp включён по умолчанию (v0.50+); ssh шифруется сам поверх |
 | Сеть | `network_mode: host` у frpc клиента; visitor — так же (см. сниппет) |
 | Владение конфигами | `user: ${FRP_UID}:${FRP_GID}` в compose (рендерит `setup.sh` из `id -u`/`id -g`) — chown и sudo не нужны |

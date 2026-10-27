@@ -23,7 +23,7 @@ WORKDIR /src
 ADD --checksum=sha256:079f5fdebfbf8b8fa42c8b03245d169a7b5298697d754d7345ea25f09e496722 \
     https://github.com/fatedier/frp/archive/refs/tags/v0.71.1.tar.gz frp-0.71.1.tar.gz
 RUN tar -xzf frp-0.71.1.tar.gz --strip-components=1 \
- && go get golang.org/x/net@v0.60.0 \
+ && go get golang.org/x/net@v0.61.0 \
  && go get golang.org/x/crypto@v0.58.0 \
  && go mod tidy \
  && go build -tags noweb -trimpath -ldflags="-s -w" -o /out/frpc ./cmd/frpc \

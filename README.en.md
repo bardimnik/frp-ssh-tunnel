@@ -134,7 +134,7 @@ checks you against its own keys; the VPS only sees encrypted relay traffic.
 # excerpt — full file in build/Dockerfile
 FROM golang:1.26-alpine AS builder
 ADD --checksum=sha256:079f… https://github.com/fatedier/frp/archive/refs/tags/v0.71.1.tar.gz …
-RUN … go get golang.org/x/net@v0.60.0 && go get golang.org/x/crypto@v0.58.0 \
+RUN … go get golang.org/x/net@v0.61.0 && go get golang.org/x/crypto@v0.58.0 \
  && go mod tidy && go build -tags noweb -trimpath -ldflags="-s -w" -o /out/frpc ./cmd/frpc …
 
 FROM alpine:3.24 AS runtime-files   # CA + tzdata + passwd/group only
@@ -314,7 +314,7 @@ same way as `client/`: a folder with `build/` + `docker-compose.yml`
 | XTCP tuning | `keepTunnelOpen = true`; fallback after 1000 ms |
 | Config format | TOML (INI is deprecated since v0.52) |
 | Images | Own `frp-local:frpc` / `frp-local:frps` — built from source v0.71.1, `scratch` final stage, non-root, noweb |
-| Security overlay | `go get x/net@v0.60.0` + `x/crypto@v0.58.0` + `apk upgrade` — fixes 4×High |
+| Security overlay | `go get x/net@v0.61.0` + `x/crypto@v0.58.0` + `apk upgrade` — fixes 4×High |
 | Channel encryption | frp TLS enabled by default (v0.50+); ssh encrypts on top |
 | Networking | `network_mode: host` for the client frpc; visitor — same (see snippet) |
 | Config ownership | `user: ${FRP_UID}:${FRP_GID}` in compose (rendered by `setup.sh` from `id -u`/`id -g`) — no chown/sudo needed |
