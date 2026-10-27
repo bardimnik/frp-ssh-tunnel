@@ -18,11 +18,11 @@ PLACEHOLDER="<IP или домен VPS>"
 gen() { openssl rand -hex 32; }
 need_openssl() { command -v openssl >/dev/null || { echo "Ошибка: openssl не найден" >&2; exit 1; }; }
 
-# --- функции PKI (mTLS): ECDSA P-256, 825 дней ---
+# --- функции PKI (mTLS): ECDSA P-256, 365 дней ---
 gen_pki_ca() {
   mkdir -p pki
   openssl ecparam -name prime256v1 -genkey -noout -out pki/ca.key 2>/dev/null
-  openssl req -x509 -new -key pki/ca.key -sha256 -days 825 \
+  openssl req -x509 -new -key pki/ca.key -sha256 -days 365 \
     -subj "/CN=frp-ssh-tunnel CA" \
     -addext "basicConstraints=critical,CA:TRUE" \
     -addext "keyUsage=critical,keyCertSign,cRLSign" \
@@ -41,7 +41,7 @@ issue_cert() { # $1=имя (server|client|visitor), $2=SAN или ""
     if [ -n "$san" ]; then printf 'subjectAltName=%s\n' "$san"; fi
   } > "pki/$name.ext"
   openssl x509 -req -in "pki/$name.csr" -CA pki/ca.crt -CAkey pki/ca.key \
-    -CAcreateserial -days 825 -sha256 -extfile "pki/$name.ext" \
+    -CAcreateserial -days 365 -sha256 -extfile "pki/$name.ext" \
     -out "pki/$name.crt" 2>/dev/null
   rm -f "pki/$name.csr" "pki/$name.ext"
   chmod 600 "pki/$name.key"; chmod 644 "pki/$name.crt"

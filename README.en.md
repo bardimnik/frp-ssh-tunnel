@@ -189,7 +189,7 @@ secrets and PKI) — run it once; other machines receive the artifacts
 ## Certificates (PKI — mutual TLS)
 
 All frp TLS traffic is protected by **mutual certificates** of our own CA
-(ECDSA P-256, 825 days): frps presents the server cert, clients present
+(ECDSA P-256, 365 days): frps presents the server cert, clients present
 client certs; both directions verify the chain up to `ca.crt`. This makes
 MITM on the frpc↔frps channel impossible, and the token is no longer the
 single line of defense: only holders of a certificate signed by our CA can
@@ -204,7 +204,7 @@ connect.
 - Clone deploys: `.secrets` **and** `pki/` travel together; with `.secrets`
   present but `pki/` missing, the script refuses to run (protection against
   a second CA) and tells you what to copy.
-- Renewal: 825 days; re-issue with `./setup.sh --rotate <IP>` on the source
+- Renewal: 365 days; re-issue with `./setup.sh --rotate <IP>` on the source
   machine + distribute `.secrets`/`pki/` + restarts.
 
 **Important when deploying from a clone**: a clone has neither `.secrets` nor
