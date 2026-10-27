@@ -7,8 +7,8 @@
 Машина «клиент» (за NAT/фаерволом) сама подключается к VPS с публичным IP;
 владелец подключается к клиенту через VPS. Используется
 [frp](https://github.com/fatedier/frp): `frps` (сервер) на VPS, `frpc`
-на целевой машине (ваш компьютер), visitor — там, откуда подключаетесь
-(конфиг visitor'а — в разделе ниже, вне этой папки).
+на целевой машине (ваш компьютер), `frpc-visitor` — там, откуда
+подключаетесь (см. `visitor/`).
 
 **Доступ приватный**: SSH-порт клиента наружу не торчит нигде. Канал доступа
 защищён `secretKey`, соединение с VPS — токеном. Наружу на VPS открыт
@@ -26,10 +26,9 @@ CVE поднимаются при сборке (`go get`).
                                         ┌─ ВЫЗОВ: ssh -p 6000 user@127.0.0.1
                                         ▼
         ┌────────── основной: XTCP (P2P) ──────────┐
-Машина ─┤                                          ▼
-подключе-     напрямую: visitor ◄──────► КЛИЕНТ:22    VPS трафик не видит
-ния (visitor, (VPS только помогает пробить NAT)
-вне папки)
+Visitor ┤                                          ▼
+(frpc-        напрямую: visitor ◄──────► КЛИЕНТ:22    VPS трафик не видит
+ visitor)     (VPS только помогает пробить NAT)
         └─ фолбэк: STCP ──► релей через VPS:7000 ──► КЛИЕНТ:22
 
 Наружу на VPS: только 7000/tcp (служебный канал frpc↔frps)
@@ -42,7 +41,7 @@ CVE поднимаются при сборке (`go get`).
 
 ## Состав папки
 
-Два **независимых** compose-проекта — для двух машин. Вся папка переносится
+Три **независимых** compose-проекта — для трёх ролей. Вся папка переносится
 целиком, на каждой машине работает только своя подпапка:
 
 ```
@@ -63,6 +62,12 @@ CVE поднимаются при сборке (`go get`).
 │   ├── frpc.toml.example   #    шаблон (рендеренный файл игнорируется git)
 │   ├── .env             #   FRP_UID/FRP_GID (рендерится setup.sh)
 │   └── frpc.toml        #   рендерится setup.sh (stcp- и xtcp-прокси)
+├── visitor/             # ← на машину, С КОТОРОЙ подключаются (frpc-visitor)
+│   ├── build/
+│   ├── docker-compose.yml  # образ frp-local:frpc
+│   ├── tls/             #   ca.crt + visitor.crt/key (рендерится setup.sh)
+│   ├── visitor.toml     #   рендерится setup.sh (visitors: xtcp + stcp-fallback)
+│   └── .env             #   FRP_UID/FRP_GID
 └── vps/                 # ← на VPS
     ├── build/
     ├── docker-compose.yml  # образ frp-local:frps
@@ -112,15 +117,23 @@ docker compose restart
 docker logs frpc                   # два прокси: «start proxy success»
 ```
 
-### 3. Подключение (visitor — с любой машины, вне этой папки)
+### 3. Visitor (машина, С КОТОРОЙ подключаются)
 
-Visitor — это frpc с конфигом `[[visitors]]` (сниппет ниже). Он подключается
-к VPS и открывает на «своей» машине локальный порт 6000, в который заведён
-туннель к клиенту. Visitor должен быть запущен в момент подключения.
+```bash
+cd <папка>
+./setup.sh <IP или домен VPS>      # рендер visitor.toml + visitor/tls
+cd visitor
+docker compose up -d --build
+docker logs frpc-visitor           # «start visitor success»; при P2P — «nat hole connection successful»
+```
+
+Артефакты (`.secrets` + `pki/` — из них рендерятся `visitor/visitor.toml` и
+`visitor/tls/`) переносятся с первоисточника (VPS), как и для клиента.
+
 Подключение:
 
 ```bash
-ssh -p 6000 user@127.0.0.1         # user — учётка НА КЛИЕНТЕ
+ssh -p 6000 root@127.0.0.1         # учётка — НА КЛИЕНТЕ (порт 6000 слушает visitor)
 ```
 
 Опционально в `~/.ssh/config`:
@@ -320,10 +333,10 @@ services:
 Портов наружу не нужно: соединение к VPS исходящее. Автозапуск после
 перезагрузки — `restart: unless-stopped`.
 
-### Visitor (на машине, с которой подключаетесь — вне этой папки)
+### Visitor (машина, с которой подключаютесь)
 
-Тот же образ `frp-local:frpc`, конфиг — `[[visitors]]` вместо `[[proxies]]`.
-Токен и секреты те же, что в `client/frpc.toml` (берутся из `.secrets`):
+Конфиг `visitor/visitor.toml` **рендерится `setup.sh`** (те же `.secrets` и
+`pki/`) — листинг ниже для понимания того, что получается:
 
 ```toml
 serverAddr = "<IP или домен VPS>"
@@ -355,11 +368,9 @@ fallbackTimeoutMs = 1000
 ```
 
 `bindPort = -1` у stcp-visitor поддержан официально (v0.71.1): слушатель не
-создаётся, visitor существует только как цель фолбэка. Запуск — так же, как
-`client/`: папка с `build/` + `docker-compose.yml` (образ `frp-local:frpc`,
-`network_mode: host`, конфиг монтируется read-only). Visitor'у нужны его
-сертификаты: скопируйте с первоисточника `pki/ca.crt`, `pki/visitor.crt`,
-`pki/visitor.key` в каталог `tls/` рядом с конфигом (маунт `./tls:/etc/frp/tls:ro`).
+создаётся, visitor существует только как цель фолбэка. Запуск — как у клиента:
+`cd visitor && docker compose up -d --build` (образ `frp-local:frpc`,
+`network_mode: host`, конфиг и `tls/` монтируются read-only).
 
 ## Принятые решения
 

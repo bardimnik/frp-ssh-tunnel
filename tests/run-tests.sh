@@ -89,7 +89,7 @@ t "T39 rotate: SAN снова IP"             'openssl x509 -in pki/server.crt -
 rm -rf pki
 OUT=$(./setup.sh 1.2.3.4 2>&1); RC=$?
 t "T40 клон-режим: tls/ на месте — рендер успешен" '[ "$RC" = 0 ] && [ -f client/frpc.toml ] && grep -q "tls.certFile" client/frpc.toml'
-rm -rf client/tls vps/tls
+rm -rf client/tls vps/tls visitor/tls
 OUT=$(./setup.sh 1.2.3.4 2>&1); RC=$?
 t "T41 клон-режим: нет tls/ — ошибка с подсказкой" '[ "$RC" != 0 ] && echo "$OUT" | grep -q "tls"'
 
@@ -109,6 +109,9 @@ t "T44 gitignore: pki"                   'git check-ignore -q pki/ca.key'
 t "T45 gitignore: tls-каталоги"          'git check-ignore -q vps/tls/server.key && git check-ignore -q client/tls/client.key'
 t "T46 gitignore: secrets и env"         'git check-ignore -q .secrets && git check-ignore -q vps/.env && git check-ignore -q client/.env'
 t "T49 семантика: visitor.example.toml"  'toml_top_ok examples/visitor.example.toml visitors'
+t "T50 visitor/visitor.toml отрендерен"  'toml_top_ok visitor/visitor.toml visitors'
+t "T51 visitor/tls отрендерен"           '[ -f visitor/tls/ca.crt ] && [ -f visitor/tls/visitor.crt ] && [ "$(stat -c %a visitor/tls/visitor.key)" = 600 ]'
+t "T52 visitor/.env с uid/gid"           '[ -f visitor/.env ] && [ "$(val visitor/.env FRP_UID)" = "$(id -u)" ]'
 
 echo
 echo "Итог: PASS=$pass FAIL=$fail (песочница: $SANDBOX)"

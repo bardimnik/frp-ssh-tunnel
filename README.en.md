@@ -42,7 +42,7 @@ the repo)   Only inbound on the VPS: 7000/tcp (frpc↔frps control channel)
 
 ## Repository layout
 
-Two **independent** compose projects — for two machines. Copy the whole
+Two **independent** compose projects — for three roles. Copy the whole
 folder; each machine only uses its own subfolder:
 
 ```
@@ -63,6 +63,12 @@ folder; each machine only uses its own subfolder:
 │   ├── frpc.toml.example   #    config template (rendered file is gitignored)
 │   ├── .env             #   FRP_UID/FRP_GID (rendered by setup.sh)
 │   └── frpc.toml        #   rendered by setup.sh (stcp + xtcp proxies)
+├── visitor/             # → to the machine you connect FROM (frpc-visitor)
+│   ├── build/
+│   ├── docker-compose.yml  # image frp-local:frpc
+│   ├── tls/             #   ca.crt + visitor.crt/key (rendered by setup.sh)
+│   ├── visitor.toml     #   rendered by setup.sh (visitors: xtcp + stcp fallback)
+│   └── .env             #   FRP_UID/FRP_GID
 └── vps/                 # → to the VPS
     ├── build/
     ├── docker-compose.yml  # image frp-local:frps
@@ -106,15 +112,24 @@ docker compose restart
 docker logs frpc                    # both proxies: "start proxy success"
 ```
 
-### 3. Connecting (visitor — from any machine, outside this repo)
-
-A visitor is an frpc with a `[[visitors]]` config (template:
-`examples/visitor.example.toml`). It connects to the VPS and opens local port
-6000 on "its" machine, wired to the tunnel leading to the client. The visitor
-must be running when you connect:
+### 3. Visitor (the machine you connect FROM)
 
 ```bash
-ssh -p 6000 user@127.0.0.1          # user — an account ON THE CLIENT
+cd <folder>
+./setup.sh <VPS IP or hostname>     # renders visitor.toml + visitor/tls
+cd visitor
+docker compose up -d --build
+docker logs frpc-visitor            # "start visitor success"; on P2P — "nat hole connection successful"
+```
+
+The artifacts (`.secrets` + `pki/` — from which `visitor/visitor.toml` and
+`visitor/tls/` are rendered) travel from the source machine (the VPS), same
+as for the client.
+
+Connect:
+
+```bash
+ssh -p 6000 root@127.0.0.1          # account ON THE CLIENT (port 6000 is served by the visitor)
 ```
 
 Optionally, `~/.ssh/config`:
@@ -321,11 +336,10 @@ services:
 No inbound ports needed: the connection to the VPS is outgoing. Auto-start
 after reboot — `restart: unless-stopped`.
 
-### Visitor (on the machine you connect FROM — outside this repo)
+### Visitor (the machine you connect FROM)
 
-Same `frp-local:frpc` image, config uses `[[visitors]]` instead of
-`[[proxies]]`. Token and secrets are the same as in `client/frpc.toml`
-(taken from `.secrets`):
+The `visitor/visitor.toml` config is **rendered by `setup.sh`** (same
+`.secrets` and `pki/`) — the listing below shows what you get:
 
 ```toml
 serverAddr = "<VPS IP or hostname>"
@@ -357,12 +371,9 @@ fallbackTimeoutMs = 1000
 ```
 
 `bindPort = -1` on an stcp visitor is officially supported (v0.71.1): no
-listener is created, the visitor exists only as a fallback target. Run it the
-same way as `client/`: a folder with `build/` + `docker-compose.yml`
-(`frp-local:frpc` image, `network_mode: host`, config mounted read-only).
-The visitor needs its certificates: copy `pki/ca.crt`, `pki/visitor.crt`,
-`pki/visitor.key` from the source machine into the `tls/` folder next to the
-config (mount `./tls:/etc/frp/tls:ro`).
+listener is created, the visitor exists only as a fallback target. Run it:
+`cd visitor && docker compose up -d --build` (`frp-local:frpc` image,
+`network_mode: host`, config and `tls/` mounted read-only).
 
 ## Design decisions
 

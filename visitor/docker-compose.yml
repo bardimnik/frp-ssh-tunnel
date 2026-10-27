@@ -1,0 +1,13 @@
+services:
+  frpc-visitor:
+    image: frp-local:frpc
+    build:
+      context: ./build
+      target: frpc-image
+    container_name: frpc-visitor
+    restart: unless-stopped
+    network_mode: host          # visitor слушает 127.0.0.1:6000 на самой машине
+    user: "${FRP_UID:-10000}:${FRP_GID:-10000}"   # deploy-пользователь
+    volumes:
+      - ./visitor.toml:/etc/frp/frpc.toml:ro
+      - ./tls:/etc/frp/tls:ro

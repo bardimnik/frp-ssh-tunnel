@@ -115,15 +115,16 @@ else
   if [ -z "${SECRET_XTCP:-}" ];  then need_openssl; SECRET_XTCP=$(gen);  new=1; fi
   printed=$new
   if [ "$new" = 1 ]; then reason="Сгенерированы новые секреты"; fi
-  # Клон-деплой (клиентская роль): PKI не рождаем — готовый tls/ копируется с первоисточника
+  # Клон-деплой (клиент/visitor-роли): PKI не рождаем — готовые tls/ копируются с первоисточника
   if [ "$pki_existed" = 0 ]; then
     if [ "$secrets_existed" = 1 ]; then
-      if [ -f client/tls/ca.crt ] && [ -f client/tls/client.crt ] && [ -f client/tls/client.key ]; then
-        pki_action=skip          # клиентский режим: рендерим конфиги, tls/ уже скопирован
+      if { [ -f client/tls/ca.crt ] && [ -f client/tls/client.crt ] && [ -f client/tls/client.key ]; } \
+         || { [ -f visitor/tls/ca.crt ] && [ -f visitor/tls/visitor.crt ] && [ -f visitor/tls/visitor.key ]; }; then
+        pki_action=skip          # клиент/visitor-режим: рендерим конфиги, tls/ уже скопирован
       else
         echo "Ошибка: найден .secrets, но нет PKI-материалов — они рождаются на машине-первоисточнике (VPS)."
-        echo "  Для клиентской роли скопируйте готовый каталог сертификатов:"
-        echo "    scp -r root@<VPS>:/opt/frp-ssh-tunnel/client/tls ./client/"
+        echo "  Для клиентской роли:  scp -r root@<VPS>:/opt/frp-ssh-tunnel/client/tls ./client/"
+        echo "  Для роли visitor:     scp -r root@<VPS>:/opt/frp-ssh-tunnel/visitor/tls ./visitor/"
         echo "  либо сделайте эту машину первоисточником: ./setup.sh --init \"$SERVER_ADDR\""
         exit 1
       fi
@@ -166,14 +167,17 @@ case "${pki_action:-}" in
     issue_cert visitor
     ;;
 esac
-if [ -n "${pki_action:-}" ] && [ "${pki_action:-}" != skip ]; then
-  mkdir -p vps/tls client/tls
+# Рендер tls-каталогов: каждый прогон обновляет их из pki/ (идемпотентно, самовосстановление)
+if [ -f pki/ca.key ]; then
+  mkdir -p vps/tls client/tls visitor/tls
   cp pki/ca.crt vps/tls/ca.crt
   cp pki/server.crt pki/server.key vps/tls/
   cp pki/ca.crt client/tls/ca.crt
   cp pki/client.crt pki/client.key client/tls/
-  chmod 600 vps/tls/server.key client/tls/client.key
-  chmod 644 vps/tls/ca.crt vps/tls/server.crt client/tls/ca.crt client/tls/client.crt
+  cp pki/ca.crt pki/visitor.crt pki/visitor.key visitor/tls/
+  chmod 600 vps/tls/server.key client/tls/client.key visitor/tls/visitor.key
+  chmod 644 vps/tls/ca.crt vps/tls/server.crt client/tls/ca.crt client/tls/client.crt \
+            visitor/tls/ca.crt visitor/tls/visitor.crt
 fi
 
 # --- рендеринг конфигов ---
@@ -234,6 +238,44 @@ FRP_GID=${frp_gid}
 EOF
 chmod 600 client/.env
 
+# Рендер конфига visitor (машина, С КОТОРОЙ подключаются)
+mkdir -p visitor
+cat > visitor/visitor.toml <<EOF
+serverAddr = "${SERVER_ADDR}"
+serverPort = 7000
+auth.method = "token"
+auth.token = "${AUTH_TOKEN}"
+
+transport.tls.certFile = "/etc/frp/tls/visitor.crt"
+transport.tls.keyFile = "/etc/frp/tls/visitor.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
+
+[[visitors]]
+name = "private_ssh_stcp"
+type = "stcp"
+serverName = "private_ssh_stcp"
+secretKey = "${SECRET_STCP}"
+bindPort = -1
+
+[[visitors]]
+name = "private_ssh_xtcp"
+type = "xtcp"
+serverName = "private_ssh_xtcp"
+secretKey = "${SECRET_XTCP}"
+bindAddr = "127.0.0.1"
+bindPort = 6000
+keepTunnelOpen = true
+fallbackTo = "private_ssh_stcp"
+fallbackTimeoutMs = 1000
+EOF
+chmod 600 visitor/visitor.toml
+
+cat > visitor/.env <<EOF
+FRP_UID=${frp_uid}
+FRP_GID=${frp_gid}
+EOF
+chmod 600 visitor/.env
+
 # --- вывод ---
 if [ "$printed" = 1 ]; then
   echo "$reason: (хранятся в $SECRETS)"
@@ -247,4 +289,4 @@ echo "SERVER_ADDR=$SERVER_ADDR"
 if [ "$SERVER_ADDR" = "$PLACEHOLDER" ]; then
   echo "ВНИМАНИЕ: адрес VPS не задан. При деплое: ./setup.sh <IP или домен VPS>"
 fi
-echo "Отрендерено: vps/.env, vps/frps.toml, client/frpc.toml, client/.env"
+echo "Отрендерено: vps/.env, vps/frps.toml, client/frpc.toml, client/.env, visitor/visitor.toml, visitor/.env"
