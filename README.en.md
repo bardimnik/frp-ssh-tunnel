@@ -200,22 +200,25 @@ connect.
   on address change only the server cert is re-issued, the CA and client
   certs stay untouched.
 - `pki/ca.key` is the root of trust: it lives **only** on the source machine
-  and is never distributed (clients need only the public `ca.crt`).
-- Clone deploys: `.secrets` **and** `pki/` travel together; with `.secrets`
-  present but `pki/` missing, the script refuses to run (protection against
+  and is **never distributed**. What gets copied where:
+  - client machine: the `client/tls/` folder (ca.crt + client.crt + client.key)
+  - visitor: `ca.crt` + `visitor.crt/key`
+  - the VPS renders its own `vps/tls/`.
+- Clone deploys: `.secrets` **and** `client/tls/` travel together; with `.secrets`
+  present but no PKI material, the script refuses to run (protection against
   a second CA) and tells you what to copy.
 - Renewal: 365 days; re-issue with `./setup.sh --rotate <IP>` on the source
   machine + distribute `.secrets`/`pki/` + restarts.
 
 **Important when deploying from a clone**: a clone has neither `.secrets` nor
-`pki/` — they travel together from the source machine (the VPS):
+a ready `tls/` — they travel together from the source machine (the VPS):
 ```bash
 scp root@<VPS>:/opt/frp-ssh-tunnel/.secrets ./.secrets
-scp -r root@<VPS>:/opt/frp-ssh-tunnel/pki ./pki
+scp -r root@<VPS>:/opt/frp-ssh-tunnel/client/tls ./client/
 ./setup.sh <IP>       # reuses the artifacts — token and certs match
 ```
-If `.secrets` exists but `pki/` is missing, the script refuses to run — that's
-protection against accidentally creating a second CA. Consistency check:
+If `.secrets` exists but PKI material is missing, the script refuses to run —
+that's protection against accidentally creating a second CA. Consistency check:
 `./setup.sh show` on both machines.
 
 ### vps/docker-compose.yml

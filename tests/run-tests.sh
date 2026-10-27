@@ -73,11 +73,13 @@ t "T37 rotate: рендер согласован"        '[ -n "$R1" ] && [ -n "
 t "T38 rotate: CA сменился"              '[ "$(md5sum pki/ca.crt | cut -d" " -f1)" != "$OLD_CA" ]'
 t "T39 rotate: SAN снова IP"             'openssl x509 -in pki/server.crt -noout -ext subjectAltName 2>/dev/null | grep -q "IP Address:1.2.3.4"'
 
-# --- fail-fast: .secrets есть, pki нет -> ошибка с подсказкой, а не генерация чужого CA ---
+# --- клон-режим (клиентская роль): pki нет, но готовый tls/ скопирован ---
 rm -rf pki
 OUT=$(./setup.sh 1.2.3.4 2>&1); RC=$?
-t "T40 рендер без pki падает"            '[ "$RC" != 0 ]'
-t "T41 подсказка про копирование pki"    'echo "$OUT" | grep -q "pki"'
+t "T40 клон-режим: tls/ на месте — рендер успешен" '[ "$RC" = 0 ] && [ -f client/frpc.toml ] && grep -q "tls.certFile" client/frpc.toml'
+rm -rf client/tls vps/tls
+OUT=$(./setup.sh 1.2.3.4 2>&1); RC=$?
+t "T41 клон-режим: нет tls/ — ошибка с подсказкой" '[ "$RC" != 0 ] && echo "$OUT" | grep -q "tls"'
 
 # --- show ---
 t "T42 show печатает секреты"            './setup.sh show | grep -q "^SECRET_STCP="'

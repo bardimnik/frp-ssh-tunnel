@@ -115,16 +115,21 @@ else
   if [ -z "${SECRET_XTCP:-}" ];  then need_openssl; SECRET_XTCP=$(gen);  new=1; fi
   printed=$new
   if [ "$new" = 1 ]; then reason="Сгенерированы новые секреты"; fi
-  # Клон-деплой: .secrets уже есть (скопирован), а PKI не приехал — не порождаем чужой CA, а объясняем
-  if [ "$pki_existed" = 0 ] && [ "$secrets_existed" = 1 ]; then
-    echo "Ошибка: найден .secrets, но нет каталога pki/ — PKI рождается на машине-первоисточнике (VPS)."
-    echo "  Скопируйте его: scp -r root@<VPS>:/opt/frp-ssh-tunnel/pki ./pki"
-    echo "  либо сделайте эту машину первоисточником: ./setup.sh --init \"$SERVER_ADDR\""
-    echo "  затем повторите: ./setup.sh \"$SERVER_ADDR\""
-    exit 1
-  fi
+  # Клон-деплой (клиентская роль): PKI не рождаем — готовый tls/ копируется с первоисточника
   if [ "$pki_existed" = 0 ]; then
-    need_openssl; pki_action=generate
+    if [ "$secrets_existed" = 1 ]; then
+      if [ -f client/tls/ca.crt ] && [ -f client/tls/client.crt ] && [ -f client/tls/client.key ]; then
+        pki_action=skip          # клиентский режим: рендерим конфиги, tls/ уже скопирован
+      else
+        echo "Ошибка: найден .secrets, но нет PKI-материалов — они рождаются на машине-первоисточнике (VPS)."
+        echo "  Для клиентской роли скопируйте готовый каталог сертификатов:"
+        echo "    scp -r root@<VPS>:/opt/frp-ssh-tunnel/client/tls ./client/"
+        echo "  либо сделайте эту машину первоисточником: ./setup.sh --init \"$SERVER_ADDR\""
+        exit 1
+      fi
+    else
+      need_openssl; pki_action=generate   # самый первый запуск где-либо
+    fi
   elif [ "${PKI_ADDR:-}" != "$SERVER_ADDR" ]; then
     need_openssl; pki_action=server   # адрес сменился — переиздаём только серверный серт
   fi
@@ -132,12 +137,14 @@ fi
 
 # --- сохранение хранилища ---
 umask 077
+# В клиентском режиме (skip) PKI_ADDR сохраняется из .secrets — адрес выдачи не менялся
+if [ "${pki_action:-skip}" != skip ]; then PKI_ADDR="${SERVER_ADDR}"; fi
 cat > "$SECRETS" <<EOF
 AUTH_TOKEN=$AUTH_TOKEN
 SECRET_STCP=$SECRET_STCP
 SECRET_XTCP=$SECRET_XTCP
 SERVER_ADDR="${SERVER_ADDR}"
-PKI_ADDR="${SERVER_ADDR}"
+PKI_ADDR="${PKI_ADDR:-}"
 EOF
 chmod 600 "$SECRETS"
 
@@ -159,7 +166,7 @@ case "${pki_action:-}" in
     issue_cert visitor
     ;;
 esac
-if [ -n "${pki_action:-}" ]; then
+if [ -n "${pki_action:-}" ] && [ "${pki_action:-}" != skip ]; then
   mkdir -p vps/tls client/tls
   cp pki/ca.crt vps/tls/ca.crt
   cp pki/server.crt pki/server.key vps/tls/
