@@ -178,6 +178,13 @@ time — **never to docker logs** (logs are persistent and readable by everyone
 with docker access). After `--rotate`, sync the folder across machines and
 restart the containers.
 
+**Important when deploying from a clone**: a clone has no `.secrets`, so
+`./setup.sh` will generate fresh secrets. Secrets must be **identical on the
+VPS and the client** — either copy an existing `.secrets` to the machine
+before running `./setup.sh` (it will be reused), or after generating on the
+VPS, copy `.secrets` to the client machine and re-render its config
+(`./setup.sh <IP>`). Consistency check: `./setup.sh show` on both machines.
+
 ### vps/docker-compose.yml
 
 ```yaml
