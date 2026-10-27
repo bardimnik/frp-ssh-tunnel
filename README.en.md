@@ -446,6 +446,25 @@ not wired up (YAGNI — will add when needed).
 | frps webServer | not used — the server has no HTTP interface |
 | Deployment | copy the folder + `docker compose up -d --build` in its subfolder on each machine |
 
+## Networking: why host mode and why no custom network is needed
+
+| Role | Network | Why |
+|---|---|---|
+| client | `network_mode: host` | frpc must reach the host's own sshd (`localIP = "127.0.0.1"`) — in a bridge network 127.0.0.1 would be the container, not the host |
+| visitor | `network_mode: host` | the visitor listens on `127.0.0.1:6000` — so your `ssh -p 6000` lands in the tunnel |
+| vps | default bridge + port publishing | frps needs one thing: to accept inbound 7000 (`ports: ["7000:7000"]`) |
+
+- Docker networks don't span machines — the connection between the roles IS
+  the frp tunnel; inside a project there is a single container — a custom
+  network adds nothing (the project's default bridge already provides
+  name-based wiring if more containers appear).
+- `network_mode: host` is a deliberate trade-off (shared host network stack);
+  mitigations: non-root under your uid, scratch image, read-only configs.
+- Security invariant: the `ports:` list in `vps/docker-compose.yml` is the
+  complete set of published ports (currently only 7000). Docker publishes
+  ports via DNAT, **bypassing** INPUT rules (ufw) — an extra port in compose
+  cannot be closed by a firewall; it is open immediately. Watch this list.
+
 ## Post-deployment checks
 
 - `docker logs frps` (VPS) — the client's frpc registered, proxies up.
