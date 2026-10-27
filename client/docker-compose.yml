@@ -10,3 +10,4 @@ services:
     user: "${FRP_UID:-10000}:${FRP_GID:-10000}"   # deploy-пользователь: читает свои конфиги без chown
     volumes:
       - ./frpc.toml:/etc/frp/frpc.toml:ro
+      - ./tls:/etc/frp/tls:ro

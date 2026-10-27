@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Тесты setup.sh. Запуск из любой точки: bash tests/run-tests.sh
 # Каждая проверка выполняется в изолированной песочнице (mktemp) —
-# реальные конфиги проекта не затрагиваются.
+# реальные конфиги проекта не затрагиваются. Последняя секция — проверки
+# уровня репозитория (gitignore), они выполняются в REPO_ROOT.
 set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SANDBOX="$(mktemp -d)"
@@ -15,7 +16,7 @@ t() { if eval "$2"; then echo "PASS: $1"; pass=$((pass+1)); else echo "FAIL: $1"
 val() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1; }
 tomlval() { sed -n "s/^$2 = \"//p" "$1" 2>/dev/null | head -1 | sed 's/"$//'; }
 
-# --- первый запуск без адреса: генерация, рендер, плейсхолдер адреса ---
+# --- первый запуск без адреса: генерация секретов, PKI и рендер ---
 t "T1 первый запуск отрабатывает"        './setup.sh >/dev/null 2>&1'
 t "T2 .secrets создан (600)"             '[ -f .secrets ] && [ "$(stat -c %a .secrets)" = 600 ]'
 t "T3 плейсхолдер адреса сохранён"       'grep -q "serverAddr = \"<IP или домен VPS>\"" client/frpc.toml'
@@ -34,25 +35,65 @@ t "T13 client/.env создан с uid/gid"     '[ -f client/.env ] && [ "$(stat
 t "T14 vps/.env содержит uid/gid"        '[ "$(val vps/.env FRP_UID)" = "$(id -u)" ] && [ "$(val vps/.env FRP_GID)" = "$(id -g)" ]'
 t "T15 скрипт не создаёт каталог pc"     '[ ! -d pc ]'
 
-# --- повторный запуск с адресом: секреты НЕ меняются, адрес и uid обновляются ---
-t "T16 повторный запуск с адресом"       './setup.sh 1.2.3.4 >/dev/null 2>&1'
-t "T17 адрес обновлён в конфиге"         'grep -q "serverAddr = \"1.2.3.4\"" client/frpc.toml'
-N_TOKEN=$(val .secrets AUTH_TOKEN)
-t "T18 секреты идемпотентны"             '[ -n "$N_TOKEN" ] && [ "$N_TOKEN" = "$TOKEN" ]'
-t "T19 .secrets хранит адрес"            '[ "$(sed -n "s/^SERVER_ADDR=\"//p" .secrets | sed "s/\"$//")" = "1.2.3.4" ]'
+# --- PKI: генерация, права, цепочки, SAN, TLS-строки в конфигах ---
+t "T16 pki: все 8 файлов созданы"        '[ -f pki/ca.crt ] && [ -f pki/ca.key ] && [ -f pki/server.crt ] && [ -f pki/server.key ] && [ -f pki/client.crt ] && [ -f pki/client.key ] && [ -f pki/visitor.crt ] && [ -f pki/visitor.key ]'
+t "T17 pki: права ключей 600"            '[ "$(stat -c %a pki/ca.key)" = 600 ] && [ "$(stat -c %a pki/server.key)" = 600 ] && [ "$(stat -c %a pki/client.key)" = 600 ] && [ "$(stat -c %a pki/visitor.key)" = 600 ]'
+t "T18 vps/tls отрендерен"               '[ -f vps/tls/ca.crt ] && [ -f vps/tls/server.crt ] && [ -f vps/tls/server.key ]'
+t "T19 client/tls отрендерен"            '[ -f client/tls/ca.crt ] && [ -f client/tls/client.crt ] && [ -f client/tls/client.key ]'
+t "T20 цепочка server.crt валидна"       'openssl verify -CAfile pki/ca.crt pki/server.crt >/dev/null 2>&1'
+t "T21 цепочка client.crt валидна"       'openssl verify -CAfile pki/ca.crt pki/client.crt >/dev/null 2>&1 && openssl verify -CAfile pki/ca.crt pki/visitor.crt >/dev/null 2>&1'
+t "T22 server.crt: EKU serverAuth"       'openssl x509 -in pki/server.crt -noout -ext extendedKeyUsage 2>/dev/null | grep -q "TLS Web Server Authentication"'
+t "T23 client.crt: EKU clientAuth"       'openssl x509 -in pki/client.crt -noout -ext extendedKeyUsage 2>/dev/null | grep -q "TLS Web Client Authentication"'
+t "T24 frps.toml: tls.force и серты"     'grep -q "transport.tls.force = true" vps/frps.toml && grep -q "certFile = \"/etc/frp/tls/server.crt\"" vps/frps.toml && grep -q "trustedCaFile" vps/frps.toml'
+t "T25 client/frpc.toml: tls-строки"     'grep -q "transport.tls.certFile" client/frpc.toml && grep -q "transport.tls.trustedCaFile" client/frpc.toml'
 
-# --- rotate: все три секрета меняются, согласованность сохраняется ---
+# --- повторный запуск с адресом: секреты и CA не меняются, SAN серверного обновляется ---
+t "T26 повторный запуск с адресом"       './setup.sh 1.2.3.4 >/dev/null 2>&1'
+t "T27 адрес обновлён в конфиге"         'grep -q "serverAddr = \"1.2.3.4\"" client/frpc.toml'
+N_TOKEN=$(val .secrets AUTH_TOKEN); N_CA=$(md5sum pki/ca.crt | cut -d" " -f1)
+t "T28 секреты идемпотентны"             '[ -n "$N_TOKEN" ] && [ "$N_TOKEN" = "$TOKEN" ]'
+t "T29 CA идемпотентен"                  '[ -n "$N_CA" ] && [ "$N_CA" = "$(md5sum pki/ca.crt | cut -d" " -f1)" ]'
+t "T30 SAN = IP Address 1.2.3.4"         'openssl x509 -in pki/server.crt -noout -ext subjectAltName 2>/dev/null | grep -q "IP Address:1.2.3.4"'
+t "T31 .secrets хранит адрес"            '[ "$(sed -n "s/^SERVER_ADDR=\"//p" .secrets | sed "s/\"$//")" = "1.2.3.4" ]'
+
+# --- смена адреса: переиздаётся только server.crt ---
+OLD_CA=$(md5sum pki/ca.crt | cut -d" " -f1); OLD_CLI=$(md5sum pki/client.crt | cut -d" " -f1)
+./setup.sh frps.example.com >/dev/null 2>&1
+t "T32 смена адреса: CA не тронут"       '[ "$(md5sum pki/ca.crt | cut -d" " -f1)" = "$OLD_CA" ]'
+t "T33 смена адреса: client.crt не тронут" '[ "$(md5sum pki/client.crt | cut -d" " -f1)" = "$OLD_CLI" ]'
+t "T34 смена адреса: SAN домен"          'openssl x509 -in pki/server.crt -noout -ext subjectAltName 2>/dev/null | grep -q "DNS:frps.example.com"'
+
+# --- rotate: всё перевыпускается, согласованность сохраняется ---
 ./setup.sh --rotate 1.2.3.4 >/dev/null 2>&1
 R_TOKEN=$(val .secrets AUTH_TOKEN); R1=$(sed -n 's/^secretKey = "//p' client/frpc.toml | head -1 | sed 's/"$//')
 R_SSTCP=$(val .secrets SECRET_STCP)
-t "T20 rotate: токен сменился"           '[ "$R_TOKEN" != "$TOKEN" ]'
-t "T21 rotate: stcp сменился"            '[ "$R_SSTCP" != "$SSTCP" ]'
-t "T22 rotate: рендер согласован"        '[ -n "$R1" ] && [ -n "$R_SSTCP" ] && [ "$R1" = "$R_SSTCP" ]'
-t "T23 rotate: адрес сохранён"           'grep -q "serverAddr = \"1.2.3.4\"" client/frpc.toml'
+t "T35 rotate: токен сменился"           '[ "$R_TOKEN" != "$TOKEN" ]'
+t "T36 rotate: stcp сменился"            '[ "$R_SSTCP" != "$SSTCP" ]'
+t "T37 rotate: рендер согласован"        '[ -n "$R1" ] && [ -n "$R_SSTCP" ] && [ "$R1" = "$R_SSTCP" ]'
+t "T38 rotate: CA сменился"              '[ "$(md5sum pki/ca.crt | cut -d" " -f1)" != "$OLD_CA" ]'
+t "T39 rotate: SAN снова IP"             'openssl x509 -in pki/server.crt -noout -ext subjectAltName 2>/dev/null | grep -q "IP Address:1.2.3.4"'
 
-# --- show: печатает, ничего не меняет ---
-t "T24 show печатает секреты"            './setup.sh show | grep -q "^SECRET_STCP="'
-t "T25 show не меняет файлы"             'H1=$(md5sum client/frpc.toml) && ./setup.sh show >/dev/null && [ "$H1" = "$(md5sum client/frpc.toml)" ]'
+# --- fail-fast: .secrets есть, pki нет -> ошибка с подсказкой, а не генерация чужого CA ---
+rm -rf pki
+OUT=$(./setup.sh 1.2.3.4 2>&1); RC=$?
+t "T40 рендер без pki падает"            '[ "$RC" != 0 ]'
+t "T41 подсказка про копирование pki"    'echo "$OUT" | grep -q "pki"'
+
+# --- show ---
+t "T42 show печатает секреты"            './setup.sh show | grep -q "^SECRET_STCP="'
+t "T43 show не меняет файлы"             'H1=$(md5sum client/frpc.toml) && ./setup.sh show >/dev/null && [ "$H1" = "$(md5sum client/frpc.toml)" ]'
+
+# --- init: машина становится первоисточником (полная регенерация, даже без pki) ---
+./setup.sh --init 1.2.3.4 >/dev/null 2>&1
+I_TOKEN=$(val .secrets AUTH_TOKEN)
+t "T47 --init создаёт PKI с нуля"        '[ -f pki/ca.key ] && [ -n "$I_TOKEN" ] && [ "$I_TOKEN" != "$R_TOKEN" ]'
+t "T48 --init рендерит согласованно"     '[ "$(sed -n "s/^secretKey = \"//p" client/frpc.toml | head -1 | sed "s/\"$//")" = "$(val .secrets SECRET_STCP)" ]'
+
+# --- уровень репозитория: gitignore покрывает секретные артефакты ---
+cd "$REPO_ROOT"
+t "T44 gitignore: pki"                   'git check-ignore -q pki/ca.key'
+t "T45 gitignore: tls-каталоги"          'git check-ignore -q vps/tls/server.key && git check-ignore -q client/tls/client.key'
+t "T46 gitignore: secrets и env"         'git check-ignore -q .secrets && git check-ignore -q vps/.env && git check-ignore -q client/.env'
 
 echo
 echo "Итог: PASS=$pass FAIL=$fail (песочница: $SANDBOX)"

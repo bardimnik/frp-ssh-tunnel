@@ -50,20 +50,23 @@ folder; each machine only uses its own subfolder:
 ├── README.md            # Russian docs
 ├── README.en.md         # this file
 ├── LICENSE              # MIT
-├── .gitignore           # rendered configs and secrets never enter git
-├── setup.sh             # generates secrets + renders configs: ./setup.sh <VPS_IP>
+├── .gitignore           # rendered configs, secrets and PKI never enter git
+├── setup.sh             # generates secrets + PKI + renders configs: ./setup.sh <VPS_IP>
 ├── .secrets             # secret store (created by the script, chmod 600, gitignored)
+├── pki/                 # CA + certificates (gitignored; private keys 600)
 ├── tests/               # run-tests.sh — setup.sh test suite (isolated sandbox)
 ├── examples/            # visitor.example.toml — visitor config template
 ├── client/              # → to the client machine (the one you connect TO)
 │   ├── build/           #   Dockerfile
 │   ├── docker-compose.yml  #    image frp-local:frpc
+│   ├── tls/             #   ca.crt + client.crt/key (rendered by setup.sh)
 │   ├── frpc.toml.example   #    config template (rendered file is gitignored)
 │   ├── .env             #   FRP_UID/FRP_GID (rendered by setup.sh)
 │   └── frpc.toml        #   rendered by setup.sh (stcp + xtcp proxies)
 └── vps/                 # → to the VPS
     ├── build/
     ├── docker-compose.yml  # image frp-local:frps
+    ├── tls/             #   ca.crt + server.crt/key (rendered by setup.sh)
     ├── frps.toml.example
     ├── frps.toml        # rendered by setup.sh
     ├── .env.example
@@ -168,22 +171,52 @@ them by hand, but the next script run overwrites them. The source of truth is
 
 ```bash
 ./setup.sh <VPS_IP>              # generate if missing + render (idempotent)
-./setup.sh --rotate <VPS_IP>     # rotate ALL secrets (then sync the folder + restart)
+./setup.sh --init <VPS_IP>       # make this machine the source of truth (full secrets + PKI regen)
+./setup.sh --rotate <VPS_IP>     # rotate ALL secrets and certs (on the source machine)
 ./setup.sh show                  # print current values
 ```
 
 `.secrets` (chmod 600) stores `AUTH_TOKEN`, `SECRET_STCP`, `SECRET_XTCP`,
-`SERVER_ADDR`. Values are printed to the terminal only at generation/rotation
-time — **never to docker logs** (logs are persistent and readable by everyone
-with docker access). After `--rotate`, sync the folder across machines and
-restart the containers.
+`SERVER_ADDR`, `PKI_ADDR`. Values are printed to the terminal only at
+generation/rotation time — **never to docker logs** (logs are persistent and
+readable by everyone with docker access). After `--rotate`, sync `.secrets`
+and `pki/` across machines and restart the containers.
 
-**Important when deploying from a clone**: a clone has no `.secrets`, so
-`./setup.sh` will generate fresh secrets. Secrets must be **identical on the
-VPS and the client** — either copy an existing `.secrets` to the machine
-before running `./setup.sh` (it will be reused), or after generating on the
-VPS, copy `.secrets` to the client machine and re-render its config
-(`./setup.sh <IP>`). Consistency check: `./setup.sh show` on both machines.
+`--init` makes a machine the **source of truth** (full regeneration of
+secrets and PKI) — run it once; other machines receive the artifacts
+(`.secrets` + `pki/`) by copying.
+
+## Certificates (PKI — mutual TLS)
+
+All frp TLS traffic is protected by **mutual certificates** of our own CA
+(ECDSA P-256, 825 days): frps presents the server cert, clients present
+client certs; both directions verify the chain up to `ca.crt`. This makes
+MITM on the frpc↔frps channel impossible, and the token is no longer the
+single line of defense: only holders of a certificate signed by our CA can
+connect.
+
+- **Server cert SAN** is derived from `SERVER_ADDR` (domain → `DNS:…`,
+  IP → `IP:…`) — connect with the same address you passed to `setup.sh`;
+  on address change only the server cert is re-issued, the CA and client
+  certs stay untouched.
+- `pki/ca.key` is the root of trust: it lives **only** on the source machine
+  and is never distributed (clients need only the public `ca.crt`).
+- Clone deploys: `.secrets` **and** `pki/` travel together; with `.secrets`
+  present but `pki/` missing, the script refuses to run (protection against
+  a second CA) and tells you what to copy.
+- Renewal: 825 days; re-issue with `./setup.sh --rotate <IP>` on the source
+  machine + distribute `.secrets`/`pki/` + restarts.
+
+**Important when deploying from a clone**: a clone has neither `.secrets` nor
+`pki/` — they travel together from the source machine (the VPS):
+```bash
+scp root@<VPS>:/opt/frp-ssh-tunnel/.secrets ./.secrets
+scp -r root@<VPS>:/opt/frp-ssh-tunnel/pki ./pki
+./setup.sh <IP>       # reuses the artifacts — token and certs match
+```
+If `.secrets` exists but `pki/` is missing, the script refuses to run — that's
+protection against accidentally creating a second CA. Consistency check:
+`./setup.sh show` on both machines.
 
 ### vps/docker-compose.yml
 
@@ -203,6 +236,7 @@ services:
       - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
     volumes:
       - ./frps.toml:/etc/frp/frps.toml:ro
+      - ./tls:/etc/frp/tls:ro
 ```
 
 ### vps/frps.toml
@@ -211,6 +245,11 @@ services:
 bindPort = 7000
 auth.method = "token"
 auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
+
+transport.tls.force = true
+transport.tls.certFile = "/etc/frp/tls/server.crt"
+transport.tls.keyFile = "/etc/frp/tls/server.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 ```
 
 No webServer on frps — the server has no HTTP interface at all.
@@ -252,6 +291,10 @@ type = "xtcp"
 secretKey = "<XTCP secret>"
 localIP = "127.0.0.1"
 localPort = 22
+
+transport.tls.certFile = "/etc/frp/tls/client.crt"
+transport.tls.keyFile = "/etc/frp/tls/client.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 ```
 
 ### client/docker-compose.yml
@@ -269,6 +312,7 @@ services:
     user: "${FRP_UID:-10000}:${FRP_GID:-10000}"   # deploy user
     volumes:
       - ./frpc.toml:/etc/frp/frpc.toml:ro
+      - ./tls:/etc/frp/tls:ro
 ```
 
 No inbound ports needed: the connection to the VPS is outgoing. Auto-start
@@ -303,12 +347,19 @@ bindPort = 6000
 keepTunnelOpen = true                 # keep the punched hole open
 fallbackTo = "private_ssh_stcp"
 fallbackTimeoutMs = 1000
+
+transport.tls.certFile = "/etc/frp/tls/visitor.crt"
+transport.tls.keyFile = "/etc/frp/tls/visitor.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 ```
 
 `bindPort = -1` on an stcp visitor is officially supported (v0.71.1): no
 listener is created, the visitor exists only as a fallback target. Run it the
 same way as `client/`: a folder with `build/` + `docker-compose.yml`
 (`frp-local:frpc` image, `network_mode: host`, config mounted read-only).
+The visitor needs its certificates: copy `pki/ca.crt`, `pki/visitor.crt`,
+`pki/visitor.key` from the source machine into the `tls/` folder next to the
+config (mount `./tls:/etc/frp/tls:ro`).
 
 ## Design decisions
 
@@ -340,14 +391,20 @@ same way as `client/`: a folder with `build/` + `docker-compose.yml`
 
 ## Security notes
 
+- **Mutual TLS**: the frpc↔frps channel is protected by certificates of our
+  own CA in both directions — MITM is impossible; frps rejects clients without
+  a signed certificate (`transport.tls.force = true`). Token + certificates —
+  two independent factors.
 - The door to the client's sshd is not exposed: connections are only possible
-  with the `secretKey`s (and after authenticating to the VPS with the token).
+  with the `secretKey`s (and after authenticating to the VPS with the token
+  and certificate).
 - Still enable **key-only** login on the client (`PasswordAuthentication no`)
   — its sshd is what authenticates you.
 - The VPS only sees frpc control traffic. On active XTCP it can't see session
   content at all (P2P). On fallback it relays the encrypted stream.
-- Keep the token and both secrets private (600-permission files; in this
-  project — `.secrets`, which the visitor copies values from).
+- Keep the token, secrets and PKI private keys private (600-permission files;
+  in this project — `.secrets` and `pki/`, gitignored). `pki/ca.key` never
+  leaves the source machine.
 - The default STUN server is public (`stun.easyvoip.com:3478`); override with
   `natHoleStunServer` in the client's and visitor's frpc if needed.
 - Fallback adds ~1 s to connection setup when P2P fails — that's normal.

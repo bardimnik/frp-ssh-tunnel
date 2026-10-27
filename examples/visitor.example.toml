@@ -1,6 +1,8 @@
 # Конфиг frpc-visitor для машины, С КОТОРОЙ подключаются.
 # setup.sh его НЕ рендерит — скопируйте файл и подставьте значения
 # из .secrets (./setup.sh show); этот файл — шаблон.
+# TLS: скопируйте с машины-первоисточника (VPS): ca.crt + visitor.crt + visitor.key
+# в каталог ./tls рядом с этим файлом (маунтится в /etc/frp/tls).
 serverAddr = "YOUR_VPS_IP_OR_HOST"
 serverPort = 7000
 auth.method = "token"
@@ -11,7 +13,7 @@ name = "private_ssh_stcp"
 type = "stcp"
 serverName = "private_ssh_stcp"
 secretKey = "YOUR_STCP_SECRET"
-bindPort = -1                        # -1 = только как цель fallback
+bindPort = -1
 
 [[visitors]]                         # основной P2P-канал + фолбэк
 name = "private_ssh_xtcp"
@@ -23,3 +25,7 @@ bindPort = 6000
 keepTunnelOpen = true
 fallbackTo = "private_ssh_stcp"
 fallbackTimeoutMs = 1000
+
+transport.tls.certFile = "/etc/frp/tls/visitor.crt"
+transport.tls.keyFile = "/etc/frp/tls/visitor.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"

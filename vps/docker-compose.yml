@@ -13,3 +13,4 @@ services:
       - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
     volumes:
       - ./frps.toml:/etc/frp/frps.toml:ro
+      - ./tls:/etc/frp/tls:ro

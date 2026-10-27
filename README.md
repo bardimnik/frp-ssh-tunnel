@@ -50,20 +50,23 @@ CVE поднимаются при сборке (`go get`).
 ├── README.md            # этот файл
 ├── README.en.md         # английская версия
 ├── LICENSE              # MIT
-├── .gitignore           # рендеренные конфиги и секреты не попадают в git
-├── setup.sh             # генерация секретов + рендер конфигов: ./setup.sh <IP_VPS>
+├── .gitignore           # рендеренные конфиги, секреты и PKI не попадают в git
+├── setup.sh             # генерация секретов + PKI + рендер конфигов: ./setup.sh <IP_VPS>
 ├── .secrets             # хранилище секретов (создаётся скриптом, chmod 600)
+├── pki/                 # CA + сертификаты (gitignored; ключи 600)
 ├── tests/               # run-tests.sh — тесты setup.sh (изолированная песочница)
 ├── examples/            # visitor.example.toml — шаблон конфига visitor'а
 ├── client/              # ← на ваш компьютер (к которому подключаются)
 │   ├── build/           #   Dockerfile
 │   ├── docker-compose.yml  #    образ frp-local:frpc
+│   ├── tls/             #   ca.crt + client.crt/key (рендерится setup.sh)
 │   ├── frpc.toml.example   #    шаблон (рендеренный файл игнорируется git)
 │   ├── .env             #   FRP_UID/FRP_GID (рендерится setup.sh)
 │   └── frpc.toml        #   рендерится setup.sh (stcp- и xtcp-прокси)
 └── vps/                 # ← на VPS
     ├── build/
     ├── docker-compose.yml  # образ frp-local:frps
+    ├── tls/             #   ca.crt + server.crt/key (рендерится setup.sh)
     ├── frps.toml.example
     ├── frps.toml        # рендерится setup.sh
     ├── .env.example
@@ -176,21 +179,51 @@ grype: **High = 0**, busybox исключён. Остаточная находк
 
 ```bash
 ./setup.sh <IP_VPS>    # генерация при отсутствии + рендер (идемпотентно)
-./setup.sh --rotate <IP_VPS>   # перевыпуск всех секретов (затем перенос папки + рестарты)
+./setup.sh --init <IP_VPS>      # сделать машину первоисточником (полная регенерация секретов + PKI)
+./setup.sh --rotate <IP_VPS>    # перевыпуск всех секретов и сертов (на первоисточнике)
 ./setup.sh show        # показать текущие значения
 ```
 
 `.secrets` (chmod 600) хранит `AUTH_TOKEN`, `SECRET_STCP`, `SECRET_XTCP`,
-`SERVER_ADDR`. Значения печатаются в терминал только при генерации/ротации —
-**не в логи docker** (логи постоянны и читаемы всеми с доступом к docker).
-После `--rotate` нужно обновить папку на всех машинах и перезапустить контейнеры.
+`SERVER_ADDR`, `PKI_ADDR`. Значения печатаются в терминал только при
+генерации/ротации — **не в логи docker** (логи постоянны и читаемы всеми
+с доступом к docker). После `--rotate` нужно обновить `.secrets` и `pki/`
+на всех машинах и перезапустить контейнеры.
 
-**Важно при деплое из клона**: в клоне `.secrets` нет, и `./setup.sh` сгенерирует
-новые секреты. Секреты должны быть **одинаковыми на VPS и клиенте**, поэтому
-либо перенесите существующий `.secrets` на машину до запуска `./setup.sh`
-(он переиспользуется), либо после генерации на VPS скопируйте `.secrets` на
-клиентскую машину и перерендерьте конфиг (`./setup.sh <IP>`).
-Проверка согласованности: `./setup.sh show` на обеих машинах.
+Команда `--init` делает машину **первоисточником** (полная регенерация
+секретов и PKI) — выполняется один раз; остальные машины получают
+артефакты (`.secrets` + `pki/`) копированием.
+
+## Сертификаты (PKI — взаимный TLS)
+
+Весь TLS-трафик frp защищён **взаимными сертификатами** нашего собственного CA
+(ECDSA P-256, срок 825 дней): frps предъявляет серверный серт, клиенты —
+клиентские; оба направления проверяются цепочкой до `ca.crt`. Это делает
+MITM на канале frpc↔frps невозможным, а токен перестаёт быть единственной
+защитой: подключиться может только владелец сертификата, подписанного нашим CA.
+
+- **SAN серверного серта** выводится из `SERVER_ADDR` (домен → `DNS:…`,
+  IP → `IP:…`) — подключайтесь тем же адресом, что передали `setup.sh`;
+  при смене адреса переиздаётся только серверный серт, CA и клиентские
+  не трогаются.
+- `pki/ca.key` — корень доверия: живёт **только** на машине-первоисточнике,
+  на клиента не раздаётся (клиентам нужен только публичный `ca.crt`).
+- Клон-деплой: переносятся `.secrets` **и** `pki/` вместе; при наличии
+  `.secrets` без `pki/` скрипт откажется работать (защита от рождения
+  чужого CA) и подскажет, что скопировать.
+- Продление: срок 825 дней; перевыпуск — `./setup.sh --rotate <IP>` на
+  первоисточнике + раздача `.secrets`/`pki/` + рестарты.
+
+**Важно при деплое из клона**: в клоне нет ни `.secrets`, ни `pki/` — они
+переносятся с машины-первоисточника (VPS) **вместе**:
+```bash
+scp root@<VPS>:/opt/frp-ssh-tunnel/.secrets ./.secrets
+scp -r root@<VPS>:/opt/frp-ssh-tunnel/pki ./pki
+./setup.sh <IP>       # переиспользует артефакты — токен и серты совпадут
+```
+Без `pki/` при наличии `.secrets` скрипт откажется работать — это защита
+от случайного рождения второго CA. Проверка согласованности:
+`./setup.sh show` на обеих машинах.
 
 ### vps/docker-compose.yml
 
@@ -218,6 +251,11 @@ services:
 bindPort = 7000
 auth.method = "token"
 auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
+
+transport.tls.force = true
+transport.tls.certFile = "/etc/frp/tls/server.crt"
+transport.tls.keyFile = "/etc/frp/tls/server.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 ```
 
 webServer у frps не используется — у сервера нет HTTP-интерфейса вообще.
@@ -252,6 +290,10 @@ type = "xtcp"
 secretKey = "<секрет XTCP>"
 localIP = "127.0.0.1"
 localPort = 22
+
+transport.tls.certFile = "/etc/frp/tls/client.crt"
+transport.tls.keyFile = "/etc/frp/tls/client.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 ```
 
 ### client/docker-compose.yml
@@ -269,6 +311,7 @@ services:
     user: "${FRP_UID:-10000}:${FRP_GID:-10000}"   # deploy-пользователь
     volumes:
       - ./frpc.toml:/etc/frp/frpc.toml:ro
+      - ./tls:/etc/frp/tls:ro
 ```
 
 Портов наружу не нужно: соединение к VPS исходящее. Автозапуск после
@@ -302,12 +345,18 @@ bindPort = 6000
 keepTunnelOpen = true                 # держать пробитую «дыру» открытой
 fallbackTo = "private_ssh_stcp"
 fallbackTimeoutMs = 1000
+
+transport.tls.certFile = "/etc/frp/tls/visitor.crt"
+transport.tls.keyFile = "/etc/frp/tls/visitor.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 ```
 
 `bindPort = -1` у stcp-visitor поддержан официально (v0.71.1): слушатель не
 создаётся, visitor существует только как цель фолбэка. Запуск — так же, как
 `client/`: папка с `build/` + `docker-compose.yml` (образ `frp-local:frpc`,
-`network_mode: host`, конфиг монтируется read-only).
+`network_mode: host`, конфиг монтируется read-only). Visitor'у нужны его
+сертификаты: скопируйте с первоисточника `pki/ca.crt`, `pki/visitor.crt`,
+`pki/visitor.key` в каталог `tls/` рядом с конфигом (маунт `./tls:/etc/frp/tls:ro`).
 
 ## Принятые решения
 
@@ -340,14 +389,17 @@ fallbackTimeoutMs = 1000
 
 ## Безопасность: важное
 
+- **Взаимный TLS**: канал frpc↔frps защищён сертами нашего CA в обе стороны —
+  MITM невозможен; frps отклоняет клиентов без подписанного серта
+  (`transport.tls.force = true`). Токен и серты — два независимых фактора.
 - Дверь на клиентский sshd не торчит наружу: подключения возможны только
-  со знанием `secretKey` (и после подключения к VPS по токену).
+  со знанием `secretKey` (и после подключения к VPS по токену и серту).
 - Всё равно включите на клиенте вход **только по ключам**
   (`PasswordAuthentication no`) — аутентифицирует именно его sshd.
 - VPS видит только: служебный трафик frpc. При активном XTCP — не видит
   вообще содержимое сессии (P2P). При фолбэке — релей шифрованного потока.
-- Токен и два секрета хранить втайне (файлы 600; в проекте — `.secrets`,
-  visitor берёт значения из него же).
+- Токен, секреты и приватные ключи PKI хранить втайне (файлы 600; в проекте —
+  `.secrets` и `pki/`, gitignored). `pki/ca.key` не покидает первоисточник.
 - STUN-сервер по умолчанию публичный (`stun.easyvoip.com:3478`); при желании —
   `natHoleStunServer` в frpc клиента и visitor'а.
 - Фолбэк добавляет ~1 с к установке соединения при неудачном P2P — это норма.

@@ -5,5 +5,10 @@ client/.env
 client/frpc.toml
 vps/frps.toml
 
+# PKI: CA и сертификаты (создаются ./setup.sh)
+pki/
+vps/tls/
+client/tls/
+
 # исходники frp скачиваются при сборке (ADD --checksum в Dockerfile)
 **/build/*.tar.gz
