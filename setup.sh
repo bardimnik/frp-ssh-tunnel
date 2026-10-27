@@ -72,10 +72,25 @@ EOF
 chmod 600 "$SECRETS"
 
 # --- рендеринг конфигов ---
+# Контейнер запускается под deploy-пользователем (user: в compose) —
+# он читает свои конфиги без chown и без sudo.
+frp_uid=$(id -u)
+frp_gid=$(id -g)
+
 cat > vps/.env <<EOF
 FRP_AUTH_TOKEN=${AUTH_TOKEN}
+FRP_UID=${frp_uid}
+FRP_GID=${frp_gid}
 EOF
 chmod 600 vps/.env
+
+# Статический конфиг frps (секретов не содержит, токен подставляет сам frp из env)
+cat > vps/frps.toml <<'EOF'
+bindPort = 7000
+auth.method = "token"
+auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
+EOF
+chmod 600 vps/frps.toml
 
 cat > client/frpc.toml <<EOF
 serverAddr = "${SERVER_ADDR}"
@@ -99,6 +114,12 @@ localPort = 22
 EOF
 chmod 600 client/frpc.toml
 
+cat > client/.env <<EOF
+FRP_UID=${frp_uid}
+FRP_GID=${frp_gid}
+EOF
+chmod 600 client/.env
+
 # --- вывод ---
 if [ "$printed" = 1 ]; then
   echo "$reason: (хранятся в $SECRETS)"
@@ -112,4 +133,4 @@ echo "SERVER_ADDR=$SERVER_ADDR"
 if [ "$SERVER_ADDR" = "$PLACEHOLDER" ]; then
   echo "ВНИМАНИЕ: адрес VPS не задан. При деплое: ./setup.sh <IP или домен VPS>"
 fi
-echo "Отрендерено: vps/.env, client/frpc.toml"
+echo "Отрендерено: vps/.env, vps/frps.toml, client/frpc.toml, client/.env"

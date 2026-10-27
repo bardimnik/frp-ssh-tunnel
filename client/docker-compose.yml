@@ -7,5 +7,6 @@ services:
     container_name: frpc
     restart: unless-stopped
     network_mode: host          # исходящее соединение к VPS + доступ к sshd хоста
+    user: "${FRP_UID:-10000}:${FRP_GID:-10000}"   # deploy-пользователь: читает свои конфиги без chown
     volumes:
       - ./frpc.toml:/etc/frp/frpc.toml:ro

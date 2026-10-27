@@ -49,20 +49,25 @@ CVE поднимаются при сборке (`go get`).
 .
 ├── README.md            # этот файл
 ├── README.en.md         # английская версия
+├── LICENSE              # MIT
+├── .gitignore           # рендеренные конфиги и секреты не попадают в git
 ├── setup.sh             # генерация секретов + рендер конфигов: ./setup.sh <IP_VPS>
 ├── .secrets             # хранилище секретов (создаётся скриптом, chmod 600)
+├── tests/               # run-tests.sh — тесты setup.sh (изолированная песочница)
+├── examples/            # visitor.example.toml — шаблон конфига visitor'а
 ├── client/              # ← на ваш компьютер (к которому подключаются)
 │   ├── build/           #   Dockerfile
 │   ├── docker-compose.yml  #    образ frp-local:frpc
 │   ├── frpc.toml.example   #    шаблон (рендеренный файл игнорируется git)
+│   ├── .env             #   FRP_UID/FRP_GID (рендерится setup.sh)
 │   └── frpc.toml        #   рендерится setup.sh (stcp- и xtcp-прокси)
-├── examples/            # visitor.example.toml — шаблон конфига visitor'а
 └── vps/                 # ← на VPS
     ├── build/
     ├── docker-compose.yml  # образ frp-local:frps
     ├── frps.toml.example
     ├── frps.toml        # рендерится setup.sh
-    └── .env.example     # → .env (рендерится setup.sh)
+    ├── .env.example
+    └── .env             # токен + FRP_UID/FRP_GID (рендерится setup.sh)
 ```
 
 Перенос любым способом (флешка, SCP, zip) — **rsync не требуется**. Целостность
@@ -77,6 +82,10 @@ CVE поднимаются при сборке (`go get`).
 
 ## Быстрый старт
 
+Требования: Docker с compose-плагином, `openssl`. Сборке нужен доступ к
+github.com — тарбол исходников скачивается и проверяется checksum'ом
+(`ADD --checksum`).
+
 ### 1. VPS
 
 ```bash
@@ -85,7 +94,6 @@ cd <папка>
 cd vps
 docker compose up -d --build
 # фаервол: открыть входящие ТОЛЬКО 7000/tcp
-chown 10000:10000 frps.toml        # конфиг должен быть читаем non-root контейнером
 docker compose restart
 docker logs frps                   # «frps started successfully»
 ```
@@ -97,7 +105,6 @@ cd <папка>
 ./setup.sh <IP или домен VPS>      # тот же секрет (переиспользуется из .secrets)
 cd client
 docker compose up -d --build
-chown 10000:10000 frpc.toml        # конфиг должен быть читаем non-root контейнером
 docker compose restart
 docker logs frpc                   # два прокси: «start proxy success»
 ```
@@ -189,6 +196,7 @@ services:
       target: frps-image
     container_name: frps
     restart: unless-stopped
+    user: "${FRP_UID:-10000}:${FRP_GID:-10000}"   # deploy-пользователь
     ports:
       - "7000:7000"               # служебный канал frpc<->frps
     environment:
@@ -212,6 +220,8 @@ webServer у frps не используется — у сервера нет HTT
 
 ```
 FRP_AUTH_TOKEN=<openssl rand -hex 32>
+FRP_UID=<id -u deploy-пользователя>
+FRP_GID=<id -g deploy-пользователя>
 ```
 
 ### client/frpc.toml (chmod 600, рендерится setup.sh)
@@ -236,6 +246,26 @@ secretKey = "<секрет XTCP>"
 localIP = "127.0.0.1"
 localPort = 22
 ```
+
+### client/docker-compose.yml
+
+```yaml
+services:
+  frpc:
+    image: frp-local:frpc
+    build:
+      context: ./build
+      target: frpc-image
+    container_name: frpc
+    restart: unless-stopped
+    network_mode: host          # исходящее соединение к VPS + доступ к sshd хоста
+    user: "${FRP_UID:-10000}:${FRP_GID:-10000}"   # deploy-пользователь
+    volumes:
+      - ./frpc.toml:/etc/frp/frpc.toml:ro
+```
+
+Портов наружу не нужно: соединение к VPS исходящее. Автозапуск после
+перезагрузки — `restart: unless-stopped`.
 
 ### Visitor (на машине, с которой подключаетесь — вне этой папки)
 
@@ -284,9 +314,10 @@ fallbackTimeoutMs = 1000
 | XTCP-тюнинг | `keepTunnelOpen = true`; фолбэк через 1000 мс |
 | Формат конфигов | TOML (INI устарел с v0.52) |
 | Образы | Свои `frp-local:frpc` / `frp-local:frps` — сборка из исходников v0.71.1, `scratch`-финал, non-root, noweb |
-| Оверлей безопасности | `go get x/net@v0.60.0` + `x/crypto@latest` + `apk upgrade` — закрывает 4×High |
+| Оверлей безопасности | `go get x/net@v0.60.0` + `x/crypto@v0.58.0` + `apk upgrade` — закрывает 4×High |
 | Шифрование канала | TLS frp включён по умолчанию (v0.50+); ssh шифруется сам поверх |
 | Сеть | `network_mode: host` у frpc клиента; visitor — так же (см. сниппет) |
+| Владение конфигами | `user: ${FRP_UID}:${FRP_GID}` в compose (рендерит `setup.sh` из `id -u`/`id -g`) — chown и sudo не нужны |
 | webServer у frps | не используется — у сервера нет HTTP-интерфейса |
 | Деплой | перенос папки + `docker compose up -d --build` в своей подпапке на каждой машине |
 

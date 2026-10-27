@@ -49,19 +49,25 @@ folder; each machine only uses its own subfolder:
 .
 ├── README.md            # Russian docs
 ├── README.en.md         # this file
+├── LICENSE              # MIT
+├── .gitignore           # rendered configs and secrets never enter git
 ├── setup.sh             # generates secrets + renders configs: ./setup.sh <VPS_IP>
 ├── .secrets             # secret store (created by the script, chmod 600, gitignored)
+├── tests/               # run-tests.sh — setup.sh test suite (isolated sandbox)
+├── examples/            # visitor.example.toml — visitor config template
 ├── client/              # → to the client machine (the one you connect TO)
 │   ├── build/           #   Dockerfile
 │   ├── docker-compose.yml  #    image frp-local:frpc
 │   ├── frpc.toml.example   #    config template (rendered file is gitignored)
+│   ├── .env             #   FRP_UID/FRP_GID (rendered by setup.sh)
 │   └── frpc.toml        #   rendered by setup.sh (stcp + xtcp proxies)
 └── vps/                 # → to the VPS
     ├── build/
     ├── docker-compose.yml  # image frp-local:frps
     ├── frps.toml.example
     ├── frps.toml        # rendered by setup.sh
-    └── .env.example     # → .env (rendered by setup.sh)
+    ├── .env.example
+    └── .env             # token + FRP_UID/FRP_GID (rendered by setup.sh)
 ```
 
 Transfer the folder any way you like (USB stick, SCP, zip). The build verifies
@@ -70,7 +76,9 @@ build on any tampering.
 
 ## Quick start
 
-Requirements: Docker + compose plugin, `openssl`.
+Requirements: Docker with the compose plugin, `openssl`. Building needs
+outbound access to github.com — the source tarball is downloaded and
+checksum-verified (`ADD --checksum`) at build time.
 
 ### 1. VPS
 
@@ -80,7 +88,6 @@ cd <folder>
 cd vps
 docker compose up -d --build
 # firewall: allow inbound 7000/tcp ONLY
-chown 10000:10000 frps.toml         # the config must be readable by the non-root container
 docker compose restart
 docker logs frps                    # "frps started successfully"
 ```
@@ -92,7 +99,6 @@ cd <folder>
 ./setup.sh <VPS IP or hostname>     # same secrets (reused from .secrets)
 cd client
 docker compose up -d --build
-chown 10000:10000 frpc.toml         # the config must be readable by the non-root container
 docker compose restart
 docker logs frpc                    # both proxies: "start proxy success"
 ```
@@ -183,8 +189,9 @@ services:
       target: frps-image
     container_name: frps
     restart: unless-stopped
+    user: "${FRP_UID:-10000}:${FRP_GID:-10000}"   # deploy user
     ports:
-      - "7000:7000"               # frpc<->frps control channel
+      - "7000:7000"               # frpc<->frps control channel (the only open port)
     environment:
       - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
     volumes:
@@ -206,6 +213,15 @@ Management: config files + `docker compose`; status via `docker logs frps`.
 
 ```
 FRP_AUTH_TOKEN=<openssl rand -hex 32>
+FRP_UID=<deploy user's `id -u`>
+FRP_GID=<deploy user's `id -g`>
+```
+
+### client/.env (chmod 600, rendered by setup.sh)
+
+```
+FRP_UID=<deploy user's `id -u`>
+FRP_GID=<deploy user's `id -g`>
 ```
 
 ### client/frpc.toml (chmod 600, rendered by setup.sh)
@@ -230,6 +246,26 @@ secretKey = "<XTCP secret>"
 localIP = "127.0.0.1"
 localPort = 22
 ```
+
+### client/docker-compose.yml
+
+```yaml
+services:
+  frpc:
+    image: frp-local:frpc
+    build:
+      context: ./build
+      target: frpc-image
+    container_name: frpc
+    restart: unless-stopped
+    network_mode: host          # outbound connection to the VPS + access to the host's sshd
+    user: "${FRP_UID:-10000}:${FRP_GID:-10000}"   # deploy user
+    volumes:
+      - ./frpc.toml:/etc/frp/frpc.toml:ro
+```
+
+No inbound ports needed: the connection to the VPS is outgoing. Auto-start
+after reboot — `restart: unless-stopped`.
 
 ### Visitor (on the machine you connect FROM — outside this repo)
 
@@ -281,6 +317,7 @@ same way as `client/`: a folder with `build/` + `docker-compose.yml`
 | Security overlay | `go get x/net@v0.60.0` + `x/crypto@v0.58.0` + `apk upgrade` — fixes 4×High |
 | Channel encryption | frp TLS enabled by default (v0.50+); ssh encrypts on top |
 | Networking | `network_mode: host` for the client frpc; visitor — same (see snippet) |
+| Config ownership | `user: ${FRP_UID}:${FRP_GID}` in compose (rendered by `setup.sh` from `id -u`/`id -g`) — no chown/sudo needed |
 | frps webServer | not used — the server has no HTTP interface |
 | Deployment | copy the folder + `docker compose up -d --build` in its subfolder on each machine |
 

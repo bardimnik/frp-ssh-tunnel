@@ -1,5 +1,6 @@
 # Конфиг frpc-visitor для машины, С КОТОРОЙ подключаются.
-# Рендерится ./setup.sh (секреты из .secrets); этот файл — шаблон.
+# setup.sh его НЕ рендерит — скопируйте файл и подставьте значения
+# из .secrets (./setup.sh show); этот файл — шаблон.
 serverAddr = "YOUR_VPS_IP_OR_HOST"
 serverPort = 7000
 auth.method = "token"

@@ -1,6 +1,7 @@
 # секреты и отрендеренные конфиги (создаются ./setup.sh)
 .secrets
 vps/.env
+client/.env
 client/frpc.toml
 vps/frps.toml
 

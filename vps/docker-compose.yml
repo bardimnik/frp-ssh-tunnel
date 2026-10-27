@@ -6,9 +6,9 @@ services:
       target: frps-image
     container_name: frps
     restart: unless-stopped
+    user: "${FRP_UID:-10000}:${FRP_GID:-10000}"   # deploy-пользователь: читает свои конфиги без chown
     ports:
-      - "7000:7000"               # служебный канал frpc<->frps
-      - "6000:6000"               # ssh к клиенту
+      - "7000:7000"               # служебный канал frpc<->frps (единственный открытый порт)
     environment:
       - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
     volumes:
