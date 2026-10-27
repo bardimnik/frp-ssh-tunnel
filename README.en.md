@@ -377,6 +377,57 @@ listener is created, the visitor exists only as a fallback target. Run it:
 `cd visitor && docker compose up -d --build` (`frp-local:frpc` image,
 `network_mode: host`, config and `tls/` mounted read-only).
 
+## Adding services
+
+The rule: a new `[[proxies]]` block on the client + a mirrored `[[visitors]]`
+block on the visitor machine. The VPS needs no changes — stcp/xtcp request
+no public ports.
+
+⚠️ `client/frpc.toml` and `visitor/visitor.toml` are **rendered by
+`setup.sh`** — edit the templates inside `setup.sh`, not the rendered files
+(manual edits are overwritten on the next run).
+
+Example — a web panel on the client's port 8080:
+
+1. In `setup.sh`, in the `client/frpc.toml` heredoc:
+   ```toml
+   [[proxies]]
+   name = "private_web_stcp"
+   type = "stcp"
+   secretKey = "${SECRET_WEB}"
+   localIP = "127.0.0.1"
+   localPort = 8080
+   ```
+2. In the `visitor/visitor.toml` heredoc:
+   ```toml
+   [[visitors]]
+   name = "private_web_stcp"
+   type = "stcp"
+   serverName = "private_web_stcp"
+   secretKey = "${SECRET_WEB}"
+   bindAddr = "127.0.0.1"
+   bindPort = 8081        # port on the visitor machine
+   ```
+3. A separate secret per service (a leaked web-panel key ≠ a leaked SSH key):
+   in the generation section of `setup.sh` — `SECRET_WEB=$(gen)` and a line
+   in `.secrets`.
+4. Apply: `git commit` + `git push` (only the structure enters git — the
+   secrets come from `.secrets`), then on the client and visitor machines:
+   `git pull && ./setup.sh <IP> && docker compose up -d`.
+
+Access: `http://localhost:8081` on the visitor machine.
+
+| Path | When | Price |
+|---|---|---|
+| stcp | a private service, access only for you | template edits only |
+| xtcp + stcp fallback | bandwidth-heavy service (P2P is faster) | two blocks + secretKey |
+| tcp + `remotePort` | the service must be PUBLIC | a public port on the VPS + firewall |
+
+Nuances: proxy names are unique on frps; `localIP = "127.0.0.1"` means the
+service must listen on the client. If services multiply — frp has
+`includes = ["./confd/*.toml"]` (one file per service); that mechanism is
+not wired up (YAGNI — will add when needed).
+
 ## Design decisions
 
 | Decision | Value |

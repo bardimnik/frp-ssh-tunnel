@@ -373,6 +373,55 @@ fallbackTimeoutMs = 1000
 `cd visitor && docker compose up -d --build` (образ `frp-local:frpc`,
 `network_mode: host`, конфиг и `tls/` монтируются read-only).
 
+## Добавление сервисов
+
+Правило: новый блок `[[proxies]]` на клиенте + зеркальный `[[visitors]]` на
+visitor-машине. VPS трогать не нужно — stcp/xtcp не просят публичных портов.
+
+⚠️ `client/frpc.toml` и `visitor/visitor.toml` **рендерятся `setup.sh`** —
+правьте шаблоны внутри `setup.sh`, а не отрендеренные файлы (их правки
+затрутся при следующем запуске).
+
+Пример — веб-панель на порту 8080 клиента:
+
+1. В `setup.sh`, в heredoc `client/frpc.toml`:
+   ```toml
+   [[proxies]]
+   name = "private_web_stcp"
+   type = "stcp"
+   secretKey = "${SECRET_WEB}"
+   localIP = "127.0.0.1"
+   localPort = 8080
+   ```
+2. В heredoc `visitor/visitor.toml`:
+   ```toml
+   [[visitors]]
+   name = "private_web_stcp"
+   type = "stcp"
+   serverName = "private_web_stcp"
+   secretKey = "${SECRET_WEB}"
+   bindAddr = "127.0.0.1"
+   bindPort = 8081        # порт на visitor-машине
+   ```
+3. Секрет на каждый сервис — свой (утечка ключа веб-панели ≠ утечка SSH):
+   в секции генерации `setup.sh` — `SECRET_WEB=$(gen)` и строка в `.secrets`.
+4. Применить: `git commit` + `git push` (в git попадёт только структура —
+   секреты берутся из `.secrets`), затем на клиенте и visitor-машине:
+   `git pull && ./setup.sh <IP> && docker compose up -d`.
+
+Доступ: `http://localhost:8081` на visitor-машине.
+
+| Путь | Когда | Цена |
+|---|---|---|
+| stcp | приватный сервис, доступ только вам | только правка шаблонов |
+| xtcp + stcp-фолбэк | трафик-heavy сервис (P2P быстрее) | два блока + secretKey |
+| tcp + `remotePort` | сервис нужен ПУБЛИЧНО | публичный порт на VPS + фаервол |
+
+Нюансы: имена прокси уникальны на frps; `localIP = "127.0.0.1"` — сервис
+должен слушать на клиенте. Если сервисов станет много — у frp есть
+`includes = ["./confd/*.toml"]` (файл на сервис); механизм не подключён
+(YAGNI — добавим, когда понадобится).
+
 ## Принятые решения
 
 | Решение | Значение |
