@@ -2,10 +2,6 @@
 
 # frp-ssh-tunnel — private SSH access to a machine behind NAT via a VPS
 
-Date: 2026-10-27 · frp **v0.71.1** · Status: **ready to deploy** — the stcp+xtcp
-scheme verified end-to-end on the built images (both paths: P2P and fallback);
-secrets and configs are managed by `setup.sh`.
-
 ## What it is
 
 A "client" machine behind NAT/firewall connects out to a VPS with a public IP;
