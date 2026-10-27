@@ -203,7 +203,6 @@ services:
 bindPort = 7000
 auth.method = "token"
 auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
-allowPorts = [{ start = 6000, end = 6010 }]
 ```
 
 webServer у frps не используется — у сервера нет HTTP-интерфейса вообще.
