@@ -428,6 +428,56 @@ service must listen on the client. If services multiply — frp has
 `includes = ["./confd/*.toml"]` (one file per service); that mechanism is
 not wired up (YAGNI — will add when needed).
 
+## Multiple client machines
+
+Each client machine has a **name** (`MACHINE`, default `private` — backward
+compatible with a single-machine setup). Everything is unique per machine:
+
+| Artifact | Format |
+|---|---|
+| Proxy names | `<machine>_ssh_stcp` / `<machine>_ssh_xtcp` |
+| Channel secrets | `SECRET_<NAME>_STCP` / `SECRET_<NAME>_XTCP` in `.secrets` |
+| Client certificate | `pki/client-<machine>.crt/key` (rendered into `client/tls/` as `client.crt/key`) |
+| Visitor blocks | one `[[visitors]]` per machine, port `6000 + N` (registration order) |
+
+The machine registry — `MACHINES` in `.secrets`; it grows automatically when
+`setup.sh` runs with a new `MACHINE`.
+
+### How to add a machine
+
+1. **On the VPS (source machine)** — issue the new machine's artifacts:
+   ```bash
+   MACHINE=<name> ./setup.sh bardimnik.ru
+   ```
+   (secret pair + `client-<name>` cert + registry update; `client/tls/` is
+   re-rendered for that machine)
+2. **On the new machine**:
+   ```bash
+   git clone https://github.com/bardimnik/frp-ssh-tunnel.git
+   # copy from the VPS: .secrets and client/tls (RIGHT AFTER step 1)
+   MACHINE=<name> ./setup.sh bardimnik.ru
+   cd client && docker compose up -d --build
+   ```
+3. **On the visitor machine** — update the registry and blocks:
+   ```bash
+   git pull
+   scp root@<VPS>:/opt/frp-ssh-tunnel/.secrets ./.secrets
+   ./setup.sh <IP>                     # visitor.toml gains the new machine's blocks
+   cd visitor && docker compose up -d
+   ```
+4. **Alias** on the visitor machine:
+   ```
+   Host <name>       # e.g.: Host homeserver
+     HostName 127.0.0.1
+     Port 6001        # 6000 + the machine's registry number
+     User <user>
+   ```
+
+Scale: dozens of machines — no limits (frp handles thousands of connections;
+visitor ports grow from 6000 in registration order). Note: if the registry
+holds several machines and `MACHINE` is unset — the script warns (the render
+runs for `private`).
+
 ## Design decisions
 
 | Decision | Value |

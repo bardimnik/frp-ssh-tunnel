@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# setup.sh — генерация секретов и рендеринг конфигов frp.
+# setup.sh — генерация секретов/PKI и рендеринг конфигов frp.
 #
 # Использование:
-#   ./setup.sh [адрес_VPS]        # первая настройка / повторный рендер (секреты сохраняются)
-#   ./setup.sh --rotate [адрес]   # перевыпуск ВСЕХ секретов (токен + оба secretKey)
-#   ./setup.sh show               # показать текущие секреты
+#   MACHINE=<имя> ./setup.sh [адрес_VPS]      # первая настройка / идемпотентный рендер
+#   MACHINE=<имя> ./setup.sh --init [адрес]   # сделать машину первоисточником (полная регенерация)
+#   ./setup.sh --rotate [адрес]               # ротация ВСЕХ секретов и сертов (на первоисточнике)
+#   ./setup.sh show                           # показать текущие значения
 #
-# Хранилище секретов: .secrets (chmod 600). Источник истины для конфигов —
-# этот скрипт: он перезаписывает vps/.env и client/frpc.toml.
+# Машины: каждая клиентская машина имеет имя (MACHINE, по умолчанию "private" —
+# обратная совместимость одиночной установки). Имена прокси: <machine>_ssh_*.
+# Реестр машин: MACHINES в .secrets (пополняется автоматически при запуске).
+# Секреты: SECRET_<ИМЯ>_STCP/XTCP на машину (для private — legacy SECRET_STCP/XTCP).
+# PKI: pki/ рождается на первоисточнике; клиентские серты client-<machine>.*
+# рендерятся в client/tls/ под именами client.crt/key.
 # Секреты печатаются в терминал только при генерации — НЕ в логи docker.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -29,10 +34,10 @@ gen_pki_ca() {
     -out pki/ca.crt 2>/dev/null
   chmod 600 pki/ca.key; chmod 644 pki/ca.crt
 }
-issue_cert() { # $1=имя (server|client|visitor), $2=SAN или ""
+issue_cert() { # $1=имя (server|client|client-<m>|visitor), $2=SAN или ""
   local name=$1
   local san="${2:-}"
-  local eku ext
+  local eku
   case $name in server) eku=serverAuth ;; *) eku=clientAuth ;; esac
   openssl ecparam -name prime256v1 -genkey -noout -out "pki/$name.key" 2>/dev/null
   openssl req -new -key "pki/$name.key" -subj "/CN=frp-$name" -out "pki/$name.csr" 2>/dev/null
@@ -57,6 +62,22 @@ compute_san() {
   fi
 }
 
+# --- машины: имя, переменные секретов, реестр ---
+MACHINE=$(printf '%s' "${MACHINE:-private}" | tr '[:upper:]' '[:lower:]')
+if ! printf '%s' "$MACHINE" | grep -qE '^[a-z0-9-]+$'; then
+  echo "Ошибка: некорректное имя машины: \"$MACHINE\" (строчные буквы, цифры, дефис)"
+  exit 1
+fi
+upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr '-' '_'; }
+stcp_var() { if [ "$1" = private ]; then echo SECRET_STCP; else echo "SECRET_$(upper "$1")_STCP"; fi; }
+xtcp_var() { if [ "$1" = private ]; then echo SECRET_XTCP; else echo "SECRET_$(upper "$1")_XTCP"; fi; }
+get_var() { eval "printf '%s' \"\${$1:-}\""; }
+register_machine() {
+  case " ${MACHINES:-} " in *" $1 "*) ;; *) MACHINES="${MACHINES:+$MACHINES }$1" ;; esac
+}
+machine_port() { local i=0 m; for m in $MACHINES; do [ "$m" = "$1" ] && { echo $((6000+i)); return; }; i=$((i+1)); done; }
+client_cert_name() { if [ "$1" = private ]; then echo client; else echo "client-$1"; fi; }
+
 # --- разбор аргументов ---
 cmd=render; addr=""
 case "${1:-}" in
@@ -75,8 +96,11 @@ fi
 
 if [ "$cmd" = show ]; then
   echo "AUTH_TOKEN=${AUTH_TOKEN:-<не сгенерирован>}"
-  echo "SECRET_STCP=${SECRET_STCP:-<не сгенерирован>}"
-  echo "SECRET_XTCP=${SECRET_XTCP:-<не сгенерирован>}"
+  echo "MACHINES=${MACHINES:-<нет>}"
+  for m in ${MACHINES:-}; do
+    echo "[$m] $(stcp_var "$m")=$(get_var "$(stcp_var "$m")")"
+    echo "[$m] $(xtcp_var "$m")=$(get_var "$(xtcp_var "$m")")"
+  done
   echo "SERVER_ADDR=${SERVER_ADDR:-<не задан>}"
   echo "PKI_ADDR=${PKI_ADDR:-<не выпущен>}"
   exit 0
@@ -93,10 +117,23 @@ if [ "$SERVER_ADDR" != "$PLACEHOLDER" ] && ! printf '%s' "$SERVER_ADDR" | grep -
   exit 1
 fi
 
-# --- генерация: rotate — все заново; иначе — только отсутствующие ---
+# --- машина регистрируется в реестре автоматически ---
+register_machine "$MACHINE"
+
+# --- генерация секретов: rotate/init — все заново; иначе — только отсутствующие ---
 printed=0
 pki_existed=0; [ -f pki/ca.key ] && pki_existed=1
 secrets_existed=0; [ -f "$SECRETS" ] && secrets_existed=1
+
+rotate_all_secrets() {
+  AUTH_TOKEN=$(gen)
+  local m
+  for m in $MACHINES; do
+    set_var "$(stcp_var "$m")" "$(gen)"
+    set_var "$(xtcp_var "$m")" "$(gen)"
+  done
+}
+set_var() { eval "$1='$2'"; }
 
 if [ "$cmd" = rotate ]; then
   need_openssl
@@ -105,23 +142,31 @@ if [ "$cmd" = rotate ]; then
     echo "  где хранится CA. Скопируйте pki/ сюда или выполните ротацию там."
     exit 1
   fi
-  AUTH_TOKEN=$(gen); SECRET_STCP=$(gen); SECRET_XTCP=$(gen)
+  rotate_all_secrets
   pki_action=rotate
   printed=1
   reason="Перевыпущены секреты и PKI"
 elif [ "$cmd" = init ]; then
   need_openssl
-  AUTH_TOKEN=$(gen); SECRET_STCP=$(gen); SECRET_XTCP=$(gen)
+  rotate_all_secrets
   pki_action=rotate   # полная регенерация PKI: CA + все серты
   printed=1
   reason="Инициализация: эта машина — первоисточник (новые секреты + PKI)"
 else
   new=0
-  if [ -z "${AUTH_TOKEN:-}" ];   then need_openssl; AUTH_TOKEN=$(gen);   new=1; fi
-  if [ -z "${SECRET_STCP:-}" ];  then need_openssl; SECRET_STCP=$(gen);  new=1; fi
-  if [ -z "${SECRET_XTCP:-}" ];  then need_openssl; SECRET_XTCP=$(gen);  new=1; fi
+  if [ -z "${AUTH_TOKEN:-}" ]; then need_openssl; AUTH_TOKEN=$(gen); new=1; fi
+  for m in $MACHINES; do
+    v1=$(stcp_var "$m"); v2=$(xtcp_var "$m")
+    if [ -z "$(get_var "$v1")" ] || [ -z "$(get_var "$v2")" ]; then
+      need_openssl; set_var "$v1" "$(gen)"; set_var "$v2" "$(gen)"; new=1
+    fi
+  done
   printed=$new
   if [ "$new" = 1 ]; then reason="Сгенерированы новые секреты"; fi
+  if [ "${MACHINE:-private}" = private ] && [ "$(set -- $MACHINES; echo $#)" -gt 1 ]; then
+    echo "ВНИМАНИЕ: в реестре несколько машин ($MACHINES), а MACHINE не задан —"
+    echo "  рендер выполняется для машины 'private'. Для другой машины: MACHINE=<имя> ./setup.sh ..."
+  fi
   # Клон-деплой (клиент/visitor-роли): PKI не рождаем — готовые tls/ копируются с первоисточника
   if [ "$pki_existed" = 0 ]; then
     if [ "$secrets_existed" = 1 ]; then
@@ -143,20 +188,30 @@ else
   fi
 fi
 
+# --- выпуск клиентского серта этой машины, если его ещё нет (только на первоисточнике) ---
+if [ -f pki/ca.key ] && [ ! -f "pki/$(client_cert_name "$MACHINE").crt" ]; then
+  need_openssl
+  issue_cert "$(client_cert_name "$MACHINE")"
+fi
+
 # --- сохранение хранилища ---
 umask 077
 # В клиентском режиме (skip) PKI_ADDR сохраняется из .secrets — адрес выдачи не менялся
 if [ "${pki_action:-skip}" != skip ]; then PKI_ADDR="${SERVER_ADDR}"; fi
-cat > "$SECRETS" <<EOF
-AUTH_TOKEN=$AUTH_TOKEN
-SECRET_STCP=$SECRET_STCP
-SECRET_XTCP=$SECRET_XTCP
-SERVER_ADDR="${SERVER_ADDR}"
-PKI_ADDR="${PKI_ADDR:-}"
-EOF
+{
+  echo "AUTH_TOKEN=$AUTH_TOKEN"
+  echo "MACHINES=\"$MACHINES\""
+  local_m=$MACHINE
+  for m in $MACHINES; do
+    echo "$(stcp_var "$m")=$(get_var "$(stcp_var "$m")")"
+    echo "$(xtcp_var "$m")=$(get_var "$(xtcp_var "$m")")"
+  done
+  echo "SERVER_ADDR=\"${SERVER_ADDR}\""
+  echo "PKI_ADDR=\"${PKI_ADDR:-}\""
+} > "$SECRETS"
 chmod 600 "$SECRETS"
 
-# --- PKI: генерация / переиздание / рендер tls-каталогов ---
+# --- PKI: генерация / переиздание ---
 case "${pki_action:-}" in
   generate)
     if [ -d client/tls ] || [ -d visitor/tls ]; then
@@ -165,7 +220,7 @@ case "${pki_action:-}" in
     fi
     gen_pki_ca
     issue_cert server   "$(compute_san)"
-    issue_cert client
+    for m in $MACHINES; do issue_cert "$(client_cert_name "$m")"; done
     issue_cert visitor
     ;;
   server)
@@ -174,7 +229,7 @@ case "${pki_action:-}" in
   rotate)
     gen_pki_ca
     issue_cert server   "$(compute_san)"
-    issue_cert client
+    for m in $MACHINES; do issue_cert "$(client_cert_name "$m")"; done
     issue_cert visitor
     ;;
 esac
@@ -183,8 +238,10 @@ if [ -f pki/ca.key ]; then
   mkdir -p vps/tls client/tls visitor/tls
   cp pki/ca.crt vps/tls/ca.crt
   cp pki/server.crt pki/server.key vps/tls/
+  cur_cert=$(client_cert_name "$MACHINE")
   cp pki/ca.crt client/tls/ca.crt
-  cp pki/client.crt pki/client.key client/tls/
+  cp "pki/$cur_cert.crt" client/tls/client.crt
+  cp "pki/$cur_cert.key" client/tls/client.key
   cp pki/ca.crt pki/visitor.crt pki/visitor.key visitor/tls/
   chmod 600 vps/tls/server.key client/tls/client.key visitor/tls/visitor.key
   chmod 644 vps/tls/ca.crt vps/tls/server.crt client/tls/ca.crt client/tls/client.crt \
@@ -230,6 +287,9 @@ transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 EOF
 chmod 600 vps/frps.toml
 
+MY_STCP=$(get_var "$(stcp_var "$MACHINE")")
+MY_XTCP=$(get_var "$(xtcp_var "$MACHINE")")
+
 cat > client/frpc.toml <<EOF
 serverAddr = "${SERVER_ADDR}"
 serverPort = 7000
@@ -241,16 +301,16 @@ transport.tls.keyFile = "/etc/frp/tls/client.key"
 transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 
 [[proxies]]
-name = "private_ssh_stcp"
+name = "${MACHINE}_ssh_stcp"
 type = "stcp"
-secretKey = "${SECRET_STCP}"
+secretKey = "${MY_STCP}"
 localIP = "127.0.0.1"
 localPort = 22
 
 [[proxies]]
-name = "private_ssh_xtcp"
+name = "${MACHINE}_ssh_xtcp"
 type = "xtcp"
-secretKey = "${SECRET_XTCP}"
+secretKey = "${MY_XTCP}"
 localIP = "127.0.0.1"
 localPort = 22
 EOF
@@ -262,9 +322,11 @@ FRP_GID=${frp_gid}
 EOF
 chmod 600 client/.env
 
-# Рендер конфига visitor (машина, С КОТОРОЙ подключаются)
+# Рендер конфига visitor: блок [[visitors]] на КАЖДУЮ машину из реестра
+# (порт 6000+индекс по порядку регистрации в MACHINES)
 mkdir -p visitor
-cat > visitor/visitor.toml <<EOF
+{
+  cat <<EOF
 serverAddr = "${SERVER_ADDR}"
 serverPort = 7000
 auth.method = "token"
@@ -273,25 +335,31 @@ auth.token = "${AUTH_TOKEN}"
 transport.tls.certFile = "/etc/frp/tls/visitor.crt"
 transport.tls.keyFile = "/etc/frp/tls/visitor.key"
 transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
+EOF
+  for m in $MACHINES; do
+    port=$(machine_port "$m")
+    cat <<EOF
 
 [[visitors]]
-name = "private_ssh_stcp"
+name = "${m}_ssh_stcp"
 type = "stcp"
-serverName = "private_ssh_stcp"
-secretKey = "${SECRET_STCP}"
+serverName = "${m}_ssh_stcp"
+secretKey = "$(get_var "$(stcp_var "$m")")"
 bindPort = -1
 
 [[visitors]]
-name = "private_ssh_xtcp"
+name = "${m}_ssh_xtcp"
 type = "xtcp"
-serverName = "private_ssh_xtcp"
-secretKey = "${SECRET_XTCP}"
+serverName = "${m}_ssh_xtcp"
+secretKey = "$(get_var "$(xtcp_var "$m")")"
 bindAddr = "127.0.0.1"
-bindPort = 6000
+bindPort = ${port}
 keepTunnelOpen = true
-fallbackTo = "private_ssh_stcp"
+fallbackTo = "${m}_ssh_stcp"
 fallbackTimeoutMs = 1000
 EOF
+  done
+} > visitor/visitor.toml
 chmod 600 visitor/visitor.toml
 
 cat > visitor/.env <<EOF
@@ -310,11 +378,12 @@ fi
 if [ "$printed" = 1 ]; then
   echo "$reason: (хранятся в $SECRETS)"
   echo "  AUTH_TOKEN=$AUTH_TOKEN"
-  echo "  SECRET_STCP=$SECRET_STCP"
-  echo "  SECRET_XTCP=$SECRET_XTCP"
+  echo "  $(stcp_var "$MACHINE")=$MY_STCP"
+  echo "  $(xtcp_var "$MACHINE")=$MY_XTCP"
 else
   echo "Секреты без изменений (показать: ./setup.sh show)"
 fi
+echo "MACHINE=$MACHINE · MACHINES=$MACHINES"
 echo "SERVER_ADDR=$SERVER_ADDR"
 if [ "$SERVER_ADDR" = "$PLACEHOLDER" ]; then
   echo "ВНИМАНИЕ: адрес VPS не задан. При деплое: ./setup.sh <IP или домен VPS>"

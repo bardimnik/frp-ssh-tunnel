@@ -103,6 +103,20 @@ t "T50 visitor/visitor.toml отрендерен"  'toml_top_ok visitor/visitor.
 t "T51 visitor/tls отрендерен"           '[ -f visitor/tls/ca.crt ] && [ -f visitor/tls/visitor.crt ] && [ "$(stat -c %a visitor/tls/visitor.key)" = 600 ]'
 t "T52 visitor/.env с uid/gid"           '[ -f visitor/.env ] && [ "$(val visitor/.env FRP_UID)" = "$(id -u)" ]'
 
+# --- несколько клиентских машин: MACHINE=<имя> ---
+MACHINE=alpha ./setup.sh 1.2.3.4 >/dev/null 2>&1
+t "T56 alpha: имена прокси с префиксом"  'grep -q "alpha_ssh_stcp" client/frpc.toml && grep -q "alpha_ssh_xtcp" client/frpc.toml'
+t "T57 alpha: секреты в .secrets"        'V=$(val .secrets SECRET_ALPHA_STCP); W=$(val .secrets SECRET_ALPHA_XTCP); [ ${#V} = 64 ] && [ ${#W} = 64 ]'
+t "T58 реестр MACHINES пополнился"       'val .secrets MACHINES | grep -qw alpha && val .secrets MACHINES | grep -qw private'
+t "T59 pki: серт client-alpha выпущен"   '[ -f pki/client-alpha.crt ] && [ -f pki/client-alpha.key ] && openssl verify -CAfile pki/ca.crt pki/client-alpha.crt >/dev/null 2>&1'
+t "T60 client/tls нормализован (alpha)"  '[ "$(md5sum pki/client-alpha.crt | cut -d" " -f1)" = "$(md5sum client/tls/client.crt | cut -d" " -f1)" ]'
+t "T61 visitor: блоки обеих машин"       'grep -q "serverName = \"alpha_ssh_xtcp\"" visitor/visitor.toml && grep -q "bindPort = 6001" visitor/visitor.toml && grep -q "serverName = \"private_ssh_xtcp\"" visitor/visitor.toml && grep -q "bindPort = 6000" visitor/visitor.toml'
+t "T62 visitor: fallback на alpha_stcp"  'grep -q "fallbackTo = \"alpha_ssh_stcp\"" visitor/visitor.toml'
+A_STCP=$(val .secrets SECRET_ALPHA_STCP)
+./setup.sh --rotate 1.2.3.4 >/dev/null 2>&1
+t "T63 rotate: секреты alpha сменились"  '[ "$(val .secrets SECRET_ALPHA_STCP)" != "$A_STCP" ]'
+t "T64 дефолт private сохранён"          'grep -q "private_ssh_stcp" client/frpc.toml && grep -q "private_ssh_xtcp" client/frpc.toml'
+
 # --- клон-режим (клиентская роль): pki нет, но готовый tls/ скопирован ---
 rm -rf pki
 OUT=$(./setup.sh 1.2.3.4 2>&1); RC=$?
@@ -112,7 +126,7 @@ OUT=$(./setup.sh 1.2.3.4 2>&1); RC=$?
 t "T41 клон-режим: нет tls/ — ошибка с подсказкой" '[ "$RC" != 0 ] && echo "$OUT" | grep -q "tls"'
 
 # --- show ---
-t "T42 show печатает секреты"            './setup.sh show | grep -q "^SECRET_STCP="'
+t "T42 show печатает секреты"            './setup.sh show | grep -q "SECRET_STCP="'
 t "T43 show не меняет файлы"             'H1=$(md5sum client/frpc.toml) && ./setup.sh show >/dev/null && [ "$H1" = "$(md5sum client/frpc.toml)" ]'
 
 # --- уровень репозитория: gitignore + шаблоны (не зависят от рабочего дерева) ---
