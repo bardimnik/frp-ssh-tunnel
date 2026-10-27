@@ -85,6 +85,42 @@ itself: the sha256-pinned `ADD --checksum` fails the build on any tampering.
 Rendered configs with secrets (`.secrets`, `*/.env`, `*/frpc.toml`, `vps/frps.toml`,
 `tls/` dirs) are **gitignored** — the repo only ships `.example` templates.
 
+## How to properly use frp-ssh-tunnel
+
+The main rule: **`--init` runs once on ONE machine** — the one where it runs
+becomes the **source of truth** (gives birth to `.secrets` + `pki/`). It can
+be the VPS, a visitor machine — any. Other machines receive the artifacts
+by copying.
+
+### From-scratch deployment order (example: the visitor is the initiator)
+
+1. **Visitor**: `git clone` → `./setup.sh --init bardimnik.ru` →
+   `cd visitor && docker compose up -d --build`
+2. **VPS**: `git pull` → copy `.secrets` + `pki/` from the visitor →
+   `./setup.sh bardimnik.ru` → `cd vps && docker compose up -d --build`
+3. **Client**: `git clone` → copy `.secrets` + `client/tls/` →
+   `./setup.sh bardimnik.ru` → `cd client && docker compose up -d --build`
+4. **Test**: `ssh -p 6000 root@127.0.0.1` (a client-side account)
+
+### What gets copied where
+
+| Machine | Artifacts | What `setup.sh` renders |
+|---|---|---|
+| Source of truth | gives birth to `.secrets` + `pki/` | its own everything |
+| VPS | `.secrets` + `pki/` (complete) | `vps/.env`, `frps.toml`, `vps/tls/` |
+| Client | `.secrets` + `client/tls/` | `client/frpc.toml`, `client/.env` |
+| Visitor | `.secrets` + `visitor/tls/` | `visitor/visitor.toml`, `visitor/.env` |
+
+### Rules
+
+- `--init` — once and on one machine; running it again on another machine
+  creates a second crypto-family (the old machines stop matching each other).
+  To move the source of truth: `--init` on the new machine + distribute the
+  artifacts to all.
+- Adding client machines — `MACHINE=<name>` (the "Multiple client machines"
+  section); rotation — `--rotate` on the source machine (the "Secrets"
+  section).
+
 ## Quick start
 
 Requirements: Docker with the compose plugin, `openssl`. Building needs

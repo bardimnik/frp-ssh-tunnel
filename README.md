@@ -89,6 +89,41 @@ Visitor ┤                                          ▼
 папки, и для клона репозитория: сначала `./setup.sh`, затем compose в своей
 подпапке.
 
+## Как правильно использовать frp-ssh-tunnel
+
+Главное правило: **`--init` выполняется один раз на одной машине** — та, где
+он запущен, становится **первоисточником** (рождает `.secrets` + `pki/`).
+Это может быть VPS, visitor-машина — любая. Остальные машины получают
+артефакты копированием.
+
+### Порядок развёртывания «с нуля» (пример: инициатор — visitor)
+
+1. **Visitor**: `git clone` → `./setup.sh --init bardimnik.ru` →
+   `cd visitor && docker compose up -d --build`
+2. **VPS**: `git pull` → скопировать `.secrets` + `pki/` с visitor'а →
+   `./setup.sh bardimnik.ru` → `cd vps && docker compose up -d --build`
+3. **Клиент**: `git clone` → скопировать `.secrets` + `client/tls/` →
+   `./setup.sh bardimnik.ru` → `cd client && docker compose up -d --build`
+4. **Тест**: `ssh -p 6000 root@127.0.0.1` (учётка клиента)
+
+### Куда что копировать
+
+| Машина | Артефакты | Что рендерит `setup.sh` |
+|---|---|---|
+| Первоисточник | рождает `.secrets` + `pki/` | всё своё |
+| VPS | `.secrets` + `pki/` (целиком) | `vps/.env`, `frps.toml`, `vps/tls/` |
+| Клиент | `.secrets` + `client/tls/` | `client/frpc.toml`, `client/.env` |
+| Visitor | `.secrets` + `visitor/tls/` | `visitor/visitor.toml`, `visitor/.env` |
+
+### Правила
+
+- `--init` — один раз и на одной машине; повторный на другой рождает вторую
+  криптосемью (старые машины перестают стыковаться). Смена первоисточника —
+  `--init` на новой машине + раздача артефактов на все.
+- Добавление клиентских машин — `MACHINE=<имя>` (раздел
+  «Несколько клиентских машин»); ротация — `--rotate` на первоисточнике
+  (раздел «Секреты»).
+
 ## Быстрый старт
 
 Требования: Docker с compose-плагином, `openssl`. Сборке нужен доступ к
