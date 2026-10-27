@@ -1,5 +1,6 @@
 # Конфиг frpc для машины-клиента (к которой подключаются).
-# Рендерится ./setup.sh (секреты из .secrets); этот файл — шаблон.
+# Имена прокси уникальны на frps: <machine>_ssh_* — MACHINE=<имя> при запуске
+# ./setup.sh (default: private). Рендерится ./setup.sh; файл — шаблон.
 serverAddr = "YOUR_VPS_IP_OR_HOST"
 serverPort = 7000
 auth.method = "token"

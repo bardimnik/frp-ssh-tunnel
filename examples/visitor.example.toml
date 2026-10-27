@@ -1,4 +1,5 @@
 # Конфиг frpc-visitor для машины, С КОТОРОЙ подключаются.
+# Имена visitors/секреты привязаны к машинам реестра (см. client/frpc.toml.example).
 # ЭТО ЭТАЛОН: setup.sh рендерит рабочий visitor/visitor.toml автоматически
 # из .secrets (./setup.sh show — показать значения). Сертификаты:
 # visitor/tls/ (ca.crt + visitor.crt/key) — тоже рендерится setup.sh.

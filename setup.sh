@@ -64,14 +64,14 @@ compute_san() {
 
 # --- машины: имя, переменные секретов, реестр ---
 MACHINE=$(printf '%s' "${MACHINE:-private}" | tr '[:upper:]' '[:lower:]')
-if ! printf '%s' "$MACHINE" | grep -qE '^[a-z0-9-]+$'; then
+if [[ "$MACHINE" =~ [^a-z0-9-] ]]; then
   echo "Ошибка: некорректное имя машины: \"$MACHINE\" (строчные буквы, цифры, дефис)"
   exit 1
 fi
 upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr '-' '_'; }
 stcp_var() { if [ "$1" = private ]; then echo SECRET_STCP; else echo "SECRET_$(upper "$1")_STCP"; fi; }
 xtcp_var() { if [ "$1" = private ]; then echo SECRET_XTCP; else echo "SECRET_$(upper "$1")_XTCP"; fi; }
-get_var() { eval "printf '%s' \"\${$1:-}\""; }
+get_var() { local v=$1; printf '%s' "${!v:-}"; }
 register_machine() {
   case " ${MACHINES:-} " in *" $1 "*) ;; *) MACHINES="${MACHINES:+$MACHINES }$1" ;; esac
 }
@@ -94,6 +94,17 @@ if [ -f "$SECRETS" ]; then
   . "$SECRETS"
 fi
 
+# --- реестр машин: записи валидируются при загрузке ---
+for m in ${MACHINES:-}; do
+  if [[ "$m" =~ [^a-z0-9-] ]]; then
+    echo "Ошибка: некорректная запись '$m' в MACHINES (.secrets) — исправьте или удалите её."
+    exit 1
+  fi
+done
+
+# Легаси-апгрейд: .secrets без реестра = одиночная установка "private"
+if [ -z "${MACHINES:-}" ] && [ -n "${AUTH_TOKEN:-}" ]; then MACHINES=private; fi
+
 if [ "$cmd" = show ]; then
   echo "AUTH_TOKEN=${AUTH_TOKEN:-<не сгенерирован>}"
   echo "MACHINES=${MACHINES:-<нет>}"
@@ -110,8 +121,9 @@ fi
 : "${SERVER_ADDR:=$PLACEHOLDER}"
 if [ -n "$addr" ]; then SERVER_ADDR="$addr"; fi
 
-# --- валидация адреса: буквы/цифры/точки/дефисы (плейсхолдер пропускается) ---
-if [ "$SERVER_ADDR" != "$PLACEHOLDER" ] && ! printf '%s' "$SERVER_ADDR" | grep -qE '^[A-Za-z0-9.-]+$'; then
+# --- валидация адреса: допустимы ТОЛЬКО буквы/цифры/точки/дефисы по всей строке
+# (негативный класс ловит и переводы строк; плейсхолдер пропускается) ---
+if [ "$SERVER_ADDR" != "$PLACEHOLDER" ] && [[ "$SERVER_ADDR" =~ [^A-Za-z0-9.-] ]]; then
   echo "Ошибка: некорректный адрес VPS: \"$SERVER_ADDR\""
   echo "  Ожидаются только буквы, цифры, точки и дефисы (домен или IP)."
   exit 1
@@ -133,7 +145,7 @@ rotate_all_secrets() {
     set_var "$(xtcp_var "$m")" "$(gen)"
   done
 }
-set_var() { eval "$1='$2'"; }
+set_var() { printf -v "$1" '%s' "$2"; }
 
 if [ "$cmd" = rotate ]; then
   need_openssl
@@ -158,14 +170,24 @@ else
   for m in $MACHINES; do
     v1=$(stcp_var "$m"); v2=$(xtcp_var "$m")
     if [ -z "$(get_var "$v1")" ] || [ -z "$(get_var "$v2")" ]; then
-      need_openssl; set_var "$v1" "$(gen)"; set_var "$v2" "$(gen)"; new=1
+      if [ "$m" = "$MACHINE" ]; then
+        # своей машине секреты разрешено рождать здесь
+        need_openssl; set_var "$v1" "$(gen)"; set_var "$v2" "$(gen)"; new=1
+      else
+        # чужой машине — НЕЛЬЗЯ: получились бы неверные секреты и тихо сломанная связность
+        echo "Ошибка: в .secrets нет секретов машины '$m' — копия устарела."
+        echo "  Скопируйте актуальный .secrets с первоисточника (VPS) и повторите."
+        exit 1
+      fi
     fi
   done
   printed=$new
   if [ "$new" = 1 ]; then reason="Сгенерированы новые секреты"; fi
   if [ "${MACHINE:-private}" = private ] && [ "$(set -- $MACHINES; echo $#)" -gt 1 ]; then
     echo "ВНИМАНИЕ: в реестре несколько машин ($MACHINES), а MACHINE не задан —"
-    echo "  рендер выполняется для машины 'private'. Для другой машины: MACHINE=<имя> ./setup.sh ..."
+    echo "  рендер client/ выполняется для машины 'private'."
+    echo "  Для visitor-машины это норма (visitor.toml рендерится по всем машинам реестра)."
+    echo "  Для другой клиентской машины: MACHINE=<имя> ./setup.sh ..."
   fi
   # Клон-деплой (клиент/visitor-роли): PKI не рождаем — готовые tls/ копируются с первоисточника
   if [ "$pki_existed" = 0 ]; then
@@ -201,7 +223,6 @@ if [ "${pki_action:-skip}" != skip ]; then PKI_ADDR="${SERVER_ADDR}"; fi
 {
   echo "AUTH_TOKEN=$AUTH_TOKEN"
   echo "MACHINES=\"$MACHINES\""
-  local_m=$MACHINE
   for m in $MACHINES; do
     echo "$(stcp_var "$m")=$(get_var "$(stcp_var "$m")")"
     echo "$(xtcp_var "$m")=$(get_var "$(xtcp_var "$m")")"
@@ -368,10 +389,11 @@ FRP_GID=${frp_gid}
 EOF
 chmod 600 visitor/.env
 
-# Деплой под root: контейнер non-root (10000), файлы — во владении 10000
+# Деплой под root: контейнер non-root (10000), файлы и каталоги tls — во владении 10000
 if [ "$root_deploy" = 1 ]; then
-  chown 10000:10000 vps/frps.toml vps/tls/* client/frpc.toml client/tls/* \
-                    visitor/visitor.toml visitor/tls/* 2>/dev/null || true
+  chown 10000:10000 vps/frps.toml vps/tls client/frpc.toml client/tls \
+                    visitor/visitor.toml visitor/tls \
+                    vps/tls/* client/tls/* visitor/tls/* 2>/dev/null || true
 fi
 
 # --- вывод ---
@@ -380,6 +402,9 @@ if [ "$printed" = 1 ]; then
   echo "  AUTH_TOKEN=$AUTH_TOKEN"
   echo "  $(stcp_var "$MACHINE")=$MY_STCP"
   echo "  $(xtcp_var "$MACHINE")=$MY_XTCP"
+  if [ "$cmd" = rotate ] || [ "$cmd" = init ]; then
+    echo "  Ротированы секреты всех машин реестра: $MACHINES"
+  fi
 else
   echo "Секреты без изменений (показать: ./setup.sh show)"
 fi

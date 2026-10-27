@@ -193,11 +193,17 @@ them by hand, but the next script run overwrites them. The source of truth is
 ./setup.sh show                  # print current values
 ```
 
-`.secrets` (chmod 600) stores `AUTH_TOKEN`, `SECRET_STCP`, `SECRET_XTCP`,
-`SERVER_ADDR`, `PKI_ADDR`. Values are printed to the terminal only at
-generation/rotation time — **never to docker logs** (logs are persistent and
-readable by everyone with docker access). After `--rotate`, sync `.secrets`
-and `pki/` across machines and restart the containers.
+`.secrets` (chmod 600) stores `AUTH_TOKEN`, the `MACHINES` registry, each
+machine's `SECRET_<NAME>_STCP/XTCP` pairs, `SERVER_ADDR`, `PKI_ADDR`. Values
+are printed to the terminal only at generation/rotation time — **never to
+docker logs** (logs are persistent and readable by everyone with docker
+access).
+
+**After `--rotate`** (run on the source machine): for EVERY machine re-render
+its certificates (`MACHINE=<name> ./setup.sh <IP>`) and distribute: `.secrets`
++ `client/tls/` to the client, `.secrets` + `visitor/tls/` to the visitor,
+then restart the containers on all machines. `pki/` (with `ca.key`) never
+leaves the source machine.
 
 `--init` makes a machine the **source of truth** (full regeneration of
 secrets and PKI) — run it once; other machines receive the artifacts
@@ -224,8 +230,11 @@ connect.
 - Clone deploys: `.secrets` **and** `client/tls/` travel together; with `.secrets`
   present but no PKI material, the script refuses to run (protection against
   a second CA) and tells you what to copy.
-- Renewal: 365 days; re-issue with `./setup.sh --rotate <IP>` on the source
-  machine + distribute `.secrets`/`pki/` + restarts.
+- Renewal: 365 days; re-issue with `--rotate` on the source machine, then for
+  each machine: `MACHINE=<name> ./setup.sh <IP>` (re-render its `client/tls/`)
+  + copy `.secrets` and `client/tls/` to the machine + restart. Per-machine
+  certificate re-issue (e.g., on compromise):
+  `rm pki/client-<name>.* && MACHINE=<name> ./setup.sh <IP>`.
 
 **Important when deploying from a clone**: a clone has neither `.secrets` nor
 a ready `tls/` — they travel together from the source machine (the VPS):

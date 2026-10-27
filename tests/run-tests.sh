@@ -116,6 +116,10 @@ A_STCP=$(val .secrets SECRET_ALPHA_STCP)
 ./setup.sh --rotate 1.2.3.4 >/dev/null 2>&1
 t "T63 rotate: секреты alpha сменились"  '[ "$(val .secrets SECRET_ALPHA_STCP)" != "$A_STCP" ]'
 t "T64 дефолт private сохранён"          'grep -q "private_ssh_stcp" client/frpc.toml && grep -q "private_ssh_xtcp" client/frpc.toml'
+t "T65 повторная регистрация не дублирует запись" 'MACHINE=alpha ./setup.sh 1.2.3.4 >/dev/null 2>&1; [ "$(val .secrets MACHINES | tr -cd "a-z ")" = "private alpha" ]'
+t "T66 дефис в имени: my-box"            'MACHINE=my-box ./setup.sh 1.2.3.4 >/dev/null 2>&1 && grep -q "my-box_ssh_stcp" client/frpc.toml && V=$(val .secrets SECRET_MY_BOX_STCP) && [ ${#V} = 64 ]'
+./setup.sh 1.2.3.4 >/dev/null 2>&1
+t "T68 семантика: visitor.toml на 2 машины" 'toml_top_ok visitor/visitor.toml visitors'
 
 # --- клон-режим (клиентская роль): pki нет, но готовый tls/ скопирован ---
 rm -rf pki
@@ -126,7 +130,7 @@ OUT=$(./setup.sh 1.2.3.4 2>&1); RC=$?
 t "T41 клон-режим: нет tls/ — ошибка с подсказкой" '[ "$RC" != 0 ] && echo "$OUT" | grep -q "tls"'
 
 # --- show ---
-t "T42 show печатает секреты"            './setup.sh show | grep -q "SECRET_STCP="'
+t "T42 show печатает секреты"            './setup.sh show | grep -q "\[private\] SECRET_STCP="'
 t "T43 show не меняет файлы"             'H1=$(md5sum client/frpc.toml) && ./setup.sh show >/dev/null && [ "$H1" = "$(md5sum client/frpc.toml)" ]'
 
 # --- уровень репозитория: gitignore + шаблоны (не зависят от рабочего дерева) ---
