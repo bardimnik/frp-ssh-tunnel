@@ -1,0 +1,20 @@
+# Конфиг frpc для машины-клиента (к которой подключаются).
+# Рендерится ./setup.sh (секреты из .secrets); этот файл — шаблон.
+serverAddr = "YOUR_VPS_IP_OR_HOST"
+serverPort = 7000
+auth.method = "token"
+auth.token = "YOUR_FRP_TOKEN"
+
+[[proxies]]
+name = "private_ssh_stcp"        # резервный канал
+type = "stcp"
+secretKey = "YOUR_STCP_SECRET"
+localIP = "127.0.0.1"
+localPort = 22
+
+[[proxies]]
+name = "private_ssh_xtcp"        # основной P2P-канал
+type = "xtcp"
+secretKey = "YOUR_XTCP_SECRET"
+localIP = "127.0.0.1"
+localPort = 22

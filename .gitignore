@@ -1,0 +1,8 @@
+# секреты и отрендеренные конфиги (создаются ./setup.sh)
+.secrets
+vps/.env
+client/frpc.toml
+vps/frps.toml
+
+# исходники frp скачиваются при сборке (ADD --checksum в Dockerfile)
+**/build/*.tar.gz

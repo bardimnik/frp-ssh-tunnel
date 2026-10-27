@@ -1,0 +1,15 @@
+services:
+  frps:
+    image: frp-local:frps
+    build:
+      context: ./build
+      target: frps-image
+    container_name: frps
+    restart: unless-stopped
+    ports:
+      - "7000:7000"               # служебный канал frpc<->frps
+      - "6000:6000"               # ssh к клиенту
+    environment:
+      - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
+    volumes:
+      - ./frps.toml:/etc/frp/frps.toml:ro

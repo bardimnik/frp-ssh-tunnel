@@ -1,0 +1,11 @@
+services:
+  frpc:
+    image: frp-local:frpc
+    build:
+      context: ./build
+      target: frpc-image
+    container_name: frpc
+    restart: unless-stopped
+    network_mode: host          # исходящее соединение к VPS + доступ к sshd хоста
+    volumes:
+      - ./frpc.toml:/etc/frp/frpc.toml:ro

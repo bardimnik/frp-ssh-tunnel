@@ -1,0 +1,24 @@
+# Конфиг frpc-visitor для машины, С КОТОРОЙ подключаются.
+# Рендерится ./setup.sh (секреты из .secrets); этот файл — шаблон.
+serverAddr = "YOUR_VPS_IP_OR_HOST"
+serverPort = 7000
+auth.method = "token"
+auth.token = "YOUR_FRP_TOKEN"
+
+[[visitors]]                         # резервный канал, без своего слушателя
+name = "private_ssh_stcp"
+type = "stcp"
+serverName = "private_ssh_stcp"
+secretKey = "YOUR_STCP_SECRET"
+bindPort = -1                        # -1 = только как цель fallback
+
+[[visitors]]                         # основной P2P-канал + фолбэк
+name = "private_ssh_xtcp"
+type = "xtcp"
+serverName = "private_ssh_xtcp"
+secretKey = "YOUR_XTCP_SECRET"
+bindAddr = "127.0.0.1"
+bindPort = 6000
+keepTunnelOpen = true
+fallbackTo = "private_ssh_stcp"
+fallbackTimeoutMs = 1000
