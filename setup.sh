@@ -208,6 +208,10 @@ serverPort = 7000
 auth.method = "token"
 auth.token = "${AUTH_TOKEN}"
 
+transport.tls.certFile = "/etc/frp/tls/client.crt"
+transport.tls.keyFile = "/etc/frp/tls/client.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
+
 [[proxies]]
 name = "private_ssh_stcp"
 type = "stcp"
@@ -221,10 +225,6 @@ type = "xtcp"
 secretKey = "${SECRET_XTCP}"
 localIP = "127.0.0.1"
 localPort = 22
-
-transport.tls.certFile = "/etc/frp/tls/client.crt"
-transport.tls.keyFile = "/etc/frp/tls/client.key"
-transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 EOF
 chmod 600 client/frpc.toml
 

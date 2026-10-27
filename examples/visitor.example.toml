@@ -8,6 +8,10 @@ serverPort = 7000
 auth.method = "token"
 auth.token = "YOUR_FRP_TOKEN"
 
+transport.tls.certFile = "/etc/frp/tls/visitor.crt"
+transport.tls.keyFile = "/etc/frp/tls/visitor.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
+
 [[visitors]]                         # резервный канал, без своего слушателя
 name = "private_ssh_stcp"
 type = "stcp"
@@ -25,7 +29,3 @@ bindPort = 6000
 keepTunnelOpen = true
 fallbackTo = "private_ssh_stcp"
 fallbackTimeoutMs = 1000
-
-transport.tls.certFile = "/etc/frp/tls/visitor.crt"
-transport.tls.keyFile = "/etc/frp/tls/visitor.key"
-transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"

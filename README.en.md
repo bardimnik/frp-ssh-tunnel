@@ -281,6 +281,10 @@ serverPort = 7000
 auth.method = "token"
 auth.token = "<frps token>"
 
+transport.tls.certFile = "/etc/frp/tls/client.crt"
+transport.tls.keyFile = "/etc/frp/tls/client.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
+
 [[proxies]]
 name = "private_ssh_stcp"             # fallback channel
 type = "stcp"
@@ -294,10 +298,6 @@ type = "xtcp"
 secretKey = "<XTCP secret>"
 localIP = "127.0.0.1"
 localPort = 22
-
-transport.tls.certFile = "/etc/frp/tls/client.crt"
-transport.tls.keyFile = "/etc/frp/tls/client.key"
-transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 ```
 
 ### client/docker-compose.yml
@@ -333,6 +333,10 @@ serverPort = 7000
 auth.method = "token"
 auth.token = "<frps token>"
 
+transport.tls.certFile = "/etc/frp/tls/visitor.crt"
+transport.tls.keyFile = "/etc/frp/tls/visitor.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
+
 [[visitors]]                          # fallback channel, no listener of its own
 name = "private_ssh_stcp"
 type = "stcp"
@@ -350,10 +354,6 @@ bindPort = 6000
 keepTunnelOpen = true                 # keep the punched hole open
 fallbackTo = "private_ssh_stcp"
 fallbackTimeoutMs = 1000
-
-transport.tls.certFile = "/etc/frp/tls/visitor.crt"
-transport.tls.keyFile = "/etc/frp/tls/visitor.key"
-transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
 ```
 
 `bindPort = -1` on an stcp visitor is officially supported (v0.71.1): no

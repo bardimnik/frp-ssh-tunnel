@@ -15,6 +15,17 @@ pass=0; fail=0
 t() { if eval "$2"; then echo "PASS: $1"; pass=$((pass+1)); else echo "FAIL: $1"; fail=$((fail+1)); fi; }
 val() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1; }
 tomlval() { sed -n "s/^$2 = \"//p" "$1" 2>/dev/null | head -1 | sed 's/"$//'; }
+# Семантика TOML: transport.tls.* обязаны быть на верхнем уровне,
+# а не внутри таблиц proxies/visitors (иначе frp: "unknown field tls")
+toml_top_ok() { # $1=файл, $2=имя таблицы (proxies|visitors)
+  python3 - "$1" "$2" <<'PYEOF'
+import sys, tomllib
+d = tomllib.load(open(sys.argv[1], 'rb'))
+assert 'transport' in d and 'tls' in d['transport'], f'transport.tls не на верхнем уровне: {list(d)}'
+for p in d.get(sys.argv[2], []):
+    assert 'transport' not in p, f'tls внутри {sys.argv[2]}: {p.get("name")}'
+PYEOF
+}
 
 # --- первый запуск без адреса: генерация секретов, PKI и рендер ---
 t "T1 первый запуск отрабатывает"        './setup.sh >/dev/null 2>&1'
@@ -46,6 +57,7 @@ t "T22 server.crt: EKU serverAuth"       'openssl x509 -in pki/server.crt -noout
 t "T23 client.crt: EKU clientAuth"       'openssl x509 -in pki/client.crt -noout -ext extendedKeyUsage 2>/dev/null | grep -q "TLS Web Client Authentication"'
 t "T24 frps.toml: tls.force и серты"     'grep -q "transport.tls.force = true" vps/frps.toml && grep -q "certFile = \"/etc/frp/tls/server.crt\"" vps/frps.toml && grep -q "trustedCaFile" vps/frps.toml'
 t "T25 client/frpc.toml: tls-строки"     'grep -q "transport.tls.certFile" client/frpc.toml && grep -q "transport.tls.trustedCaFile" client/frpc.toml'
+t "T25a семантика: tls на верхнем уровне" 'toml_top_ok client/frpc.toml proxies'
 
 # --- повторный запуск с адресом: секреты и CA не меняются, SAN серверного обновляется ---
 t "T26 повторный запуск с адресом"       './setup.sh 1.2.3.4 >/dev/null 2>&1'
@@ -96,6 +108,7 @@ cd "$REPO_ROOT"
 t "T44 gitignore: pki"                   'git check-ignore -q pki/ca.key'
 t "T45 gitignore: tls-каталоги"          'git check-ignore -q vps/tls/server.key && git check-ignore -q client/tls/client.key'
 t "T46 gitignore: secrets и env"         'git check-ignore -q .secrets && git check-ignore -q vps/.env && git check-ignore -q client/.env'
+t "T49 семантика: visitor.example.toml"  'toml_top_ok examples/visitor.example.toml visitors'
 
 echo
 echo "Итог: PASS=$pass FAIL=$fail (песочница: $SANDBOX)"
