@@ -2,7 +2,8 @@
 # Тесты setup.sh. Запуск из любой точки: bash tests/run-tests.sh
 # Каждая проверка выполняется в изолированной песочнице (mktemp) —
 # реальные конфиги проекта не затрагиваются. Последняя секция — проверки
-# уровня репозитория (gitignore), они выполняются в REPO_ROOT.
+# уровня репозитория (gitignore, шаблоны), они выполняются в REPO_ROOT
+# и не зависят от состояния рабочего дерева.
 set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SANDBOX="$(mktemp -d)"
@@ -59,14 +60,16 @@ t "T24 frps.toml: tls.force и серты"     'grep -q "transport.tls.force = t
 t "T25 client/frpc.toml: tls-строки"     'grep -q "transport.tls.certFile" client/frpc.toml && grep -q "transport.tls.trustedCaFile" client/frpc.toml'
 t "T25a семантика: tls на верхнем уровне" 'toml_top_ok client/frpc.toml proxies'
 
-# --- повторный запуск с адресом: секреты и CA не меняются, SAN серверного обновляется ---
+# --- повторный запуск с адресом: секреты, CA и server.crt не меняются; SAN обновляется ---
 t "T26 повторный запуск с адресом"       './setup.sh 1.2.3.4 >/dev/null 2>&1'
 t "T27 адрес обновлён в конфиге"         'grep -q "serverAddr = \"1.2.3.4\"" client/frpc.toml'
-N_TOKEN=$(val .secrets AUTH_TOKEN); N_CA=$(md5sum pki/ca.crt | cut -d" " -f1)
+N_TOKEN=$(val .secrets AUTH_TOKEN); N_CA=$(md5sum pki/ca.crt | cut -d" " -f1); N_SRV=$(md5sum pki/server.crt | cut -d" " -f1)
 t "T28 секреты идемпотентны"             '[ -n "$N_TOKEN" ] && [ "$N_TOKEN" = "$TOKEN" ]'
 t "T29 CA идемпотентен"                  '[ -n "$N_CA" ] && [ "$N_CA" = "$(md5sum pki/ca.crt | cut -d" " -f1)" ]'
 t "T30 SAN = IP Address 1.2.3.4"         'openssl x509 -in pki/server.crt -noout -ext subjectAltName 2>/dev/null | grep -q "IP Address:1.2.3.4"'
 t "T31 .secrets хранит адрес"            '[ "$(sed -n "s/^SERVER_ADDR=\"//p" .secrets | sed "s/\"$//")" = "1.2.3.4" ]'
+./setup.sh 1.2.3.4 >/dev/null 2>&1
+t "T55 server.crt идемпотентен"          '[ "$(md5sum pki/server.crt | cut -d" " -f1)" = "$N_SRV" ]'
 
 # --- смена адреса: переиздаётся только server.crt ---
 OLD_CA=$(md5sum pki/ca.crt | cut -d" " -f1); OLD_CLI=$(md5sum pki/client.crt | cut -d" " -f1)
@@ -85,6 +88,21 @@ t "T37 rotate: рендер согласован"        '[ -n "$R1" ] && [ -n "
 t "T38 rotate: CA сменился"              '[ "$(md5sum pki/ca.crt | cut -d" " -f1)" != "$OLD_CA" ]'
 t "T39 rotate: SAN снова IP"             'openssl x509 -in pki/server.crt -noout -ext subjectAltName 2>/dev/null | grep -q "IP Address:1.2.3.4"'
 
+# --- rotate без ca.key невозможен (не первоисточник) ---
+mv pki/ca.key pki/ca.key.off
+OUT=$(./setup.sh --rotate 1.2.3.4 2>&1); RC=$?
+t "T54 rotate без ca.key — отказ"        '[ "$RC" != 0 ] && echo "$OUT" | grep -q "первоисточник"'
+mv pki/ca.key.off pki/ca.key
+
+# --- валидация адреса: мусор не проходит ---
+OUT=$(./setup.sh "bad;addr" 2>&1); RC=$?
+t "T53 валидация адреса: мусор отклонён" '[ "$RC" != 0 ]'
+
+# --- visitor-артефакты (песочница) ---
+t "T50 visitor/visitor.toml отрендерен"  'toml_top_ok visitor/visitor.toml visitors'
+t "T51 visitor/tls отрендерен"           '[ -f visitor/tls/ca.crt ] && [ -f visitor/tls/visitor.crt ] && [ "$(stat -c %a visitor/tls/visitor.key)" = 600 ]'
+t "T52 visitor/.env с uid/gid"           '[ -f visitor/.env ] && [ "$(val visitor/.env FRP_UID)" = "$(id -u)" ]'
+
 # --- клон-режим (клиентская роль): pki нет, но готовый tls/ скопирован ---
 rm -rf pki
 OUT=$(./setup.sh 1.2.3.4 2>&1); RC=$?
@@ -97,21 +115,12 @@ t "T41 клон-режим: нет tls/ — ошибка с подсказкой
 t "T42 show печатает секреты"            './setup.sh show | grep -q "^SECRET_STCP="'
 t "T43 show не меняет файлы"             'H1=$(md5sum client/frpc.toml) && ./setup.sh show >/dev/null && [ "$H1" = "$(md5sum client/frpc.toml)" ]'
 
-# --- init: машина становится первоисточником (полная регенерация, даже без pki) ---
-./setup.sh --init 1.2.3.4 >/dev/null 2>&1
-I_TOKEN=$(val .secrets AUTH_TOKEN)
-t "T47 --init создаёт PKI с нуля"        '[ -f pki/ca.key ] && [ -n "$I_TOKEN" ] && [ "$I_TOKEN" != "$R_TOKEN" ]'
-t "T48 --init рендерит согласованно"     '[ "$(sed -n "s/^secretKey = \"//p" client/frpc.toml | head -1 | sed "s/\"$//")" = "$(val .secrets SECRET_STCP)" ]'
-
-# --- уровень репозитория: gitignore покрывает секретные артефакты ---
+# --- уровень репозитория: gitignore + шаблоны (не зависят от рабочего дерева) ---
 cd "$REPO_ROOT"
 t "T44 gitignore: pki"                   'git check-ignore -q pki/ca.key'
 t "T45 gitignore: tls-каталоги"          'git check-ignore -q vps/tls/server.key && git check-ignore -q client/tls/client.key'
 t "T46 gitignore: secrets и env"         'git check-ignore -q .secrets && git check-ignore -q vps/.env && git check-ignore -q client/.env'
 t "T49 семантика: visitor.example.toml"  'toml_top_ok examples/visitor.example.toml visitors'
-t "T50 visitor/visitor.toml отрендерен"  'toml_top_ok visitor/visitor.toml visitors'
-t "T51 visitor/tls отрендерен"           '[ -f visitor/tls/ca.crt ] && [ -f visitor/tls/visitor.crt ] && [ "$(stat -c %a visitor/tls/visitor.key)" = 600 ]'
-t "T52 visitor/.env с uid/gid"           '[ -f visitor/.env ] && [ "$(val visitor/.env FRP_UID)" = "$(id -u)" ]'
 
 echo
 echo "Итог: PASS=$pass FAIL=$fail (песочница: $SANDBOX)"

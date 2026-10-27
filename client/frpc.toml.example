@@ -5,6 +5,10 @@ serverPort = 7000
 auth.method = "token"
 auth.token = "YOUR_FRP_TOKEN"
 
+transport.tls.certFile = "/etc/frp/tls/client.crt"
+transport.tls.keyFile = "/etc/frp/tls/client.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
+
 [[proxies]]
 name = "private_ssh_stcp"        # резервный канал
 type = "stcp"

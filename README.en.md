@@ -26,12 +26,11 @@ versions).
                                         ┌─ CALL: ssh -p 6000 user@127.0.0.1
                                         ▼
         ┌────────── primary: XTCP (P2P) ───────────┐
-Connec- ┤                                          ▼
-tion    direct: visitor ◄──────► CLIENT:22        VPS can't see the traffic
-machine (VPS only helps punch through NAT)
-(visitor,└─ fallback: STCP ──► relay via VPS:7000 ──► CLIENT:22
-outside
-the repo)   Only inbound on the VPS: 7000/tcp (frpc↔frps control channel)
+Visitor ┤                                          ▼
+(frpc-     direct: visitor ◄──────► CLIENT:22   VPS can't see the traffic
+ visitor)  machine (VPS only helps punch through NAT)
+        └─ fallback: STCP ──► relay via VPS:7000 ──► CLIENT:22
+        Only inbound on the VPS: 7000/tcp (frpc↔frps control channel)
 ```
 
 - **Primary XTCP (P2P)**: NAT hole punching via STUN; when it succeeds,
@@ -42,8 +41,9 @@ the repo)   Only inbound on the VPS: 7000/tcp (frpc↔frps control channel)
 
 ## Repository layout
 
-Two **independent** compose projects — for three roles. Copy the whole
-folder; each machine only uses its own subfolder:
+Three **independent** compose projects — for three roles. Copy the whole
+folder (except `pki/` — it stays on the source machine); each machine only
+uses its own subfolder:
 
 ```
 .
@@ -79,9 +79,11 @@ folder; each machine only uses its own subfolder:
     └── .env             # token + FRP_UID/FRP_GID (rendered by setup.sh)
 ```
 
-Transfer the folder any way you like (USB stick, SCP, zip). The build verifies
-the frp source integrity itself: the sha256-pinned `ADD --checksum` fails the
-build on any tampering.
+Transfer the folder any way you like (USB stick, SCP, zip) — **except `pki/`**,
+which stays on the source machine. The build verifies the frp source integrity
+itself: the sha256-pinned `ADD --checksum` fails the build on any tampering.
+Rendered configs with secrets (`.secrets`, `*/.env`, `*/frpc.toml`, `vps/frps.toml`,
+`tls/` dirs) are **gitignored** — the repo only ships `.example` templates.
 
 ## Quick start
 
@@ -146,7 +148,7 @@ checks you against its own keys; the VPS only sees encrypted relay traffic.
 
 ## Building the images
 
-`build/Dockerfile` (in `client/build/` and `vps/build/` — identical):
+`build/Dockerfile` — identical in all three roles (`client/build/`, `visitor/build/`, `vps/build/`):
 
 ```dockerfile
 # excerpt — full file in build/Dockerfile

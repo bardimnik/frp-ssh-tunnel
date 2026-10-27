@@ -86,6 +86,13 @@ fi
 : "${SERVER_ADDR:=$PLACEHOLDER}"
 if [ -n "$addr" ]; then SERVER_ADDR="$addr"; fi
 
+# --- валидация адреса: буквы/цифры/точки/дефисы (плейсхолдер пропускается) ---
+if [ "$SERVER_ADDR" != "$PLACEHOLDER" ] && ! printf '%s' "$SERVER_ADDR" | grep -qE '^[A-Za-z0-9.-]+$'; then
+  echo "Ошибка: некорректный адрес VPS: \"$SERVER_ADDR\""
+  echo "  Ожидаются только буквы, цифры, точки и дефисы (домен или IP)."
+  exit 1
+fi
+
 # --- генерация: rotate — все заново; иначе — только отсутствующие ---
 printed=0
 pki_existed=0; [ -f pki/ca.key ] && pki_existed=1
@@ -152,6 +159,10 @@ chmod 600 "$SECRETS"
 # --- PKI: генерация / переиздание / рендер tls-каталогов ---
 case "${pki_action:-}" in
   generate)
+    if [ -d client/tls ] || [ -d visitor/tls ]; then
+      echo "ВНИМАНИЕ: найдены существующие каталоги tls/ — они перезаписаны новыми сертами."
+      echo "  Проверьте согласованность с остальными машинами: ./setup.sh show"
+    fi
     gen_pki_ca
     issue_cert server   "$(compute_san)"
     issue_cert client
@@ -179,12 +190,25 @@ if [ -f pki/ca.key ]; then
   chmod 644 vps/tls/ca.crt vps/tls/server.crt client/tls/ca.crt client/tls/client.crt \
             visitor/tls/ca.crt visitor/tls/visitor.crt
 fi
+if [ "${pki_action:-}" = generate ]; then
+  echo "Эта машина теперь ПЕРВОИСТОЧНИК: .secrets + pki/ — перенесите их на остальные машины."
+  echo "  Если первоисточник уже существует на другой машине — удалите здесь .secrets и pki/"
+  echo "  и скопируйте артефакты с него (иначе клиенты не примут серты)."
+fi
 
 # --- рендеринг конфигов ---
 # Контейнер запускается под deploy-пользователем (user: в compose) —
 # он читает свои конфиги без chown и без sudo.
 frp_uid=$(id -u)
 frp_gid=$(id -g)
+root_deploy=0
+if [ "$frp_uid" = 0 ]; then
+  # Деплой под root: контейнер оставляем non-root (uid 10000 из образа),
+  # а отрендеренным файлам отдаем владение 10000 — иначе контейнер их не прочитает
+  root_deploy=1
+  frp_uid=10000
+  frp_gid=10000
+fi
 
 cat > vps/.env <<EOF
 FRP_AUTH_TOKEN=${AUTH_TOKEN}
@@ -275,6 +299,12 @@ FRP_UID=${frp_uid}
 FRP_GID=${frp_gid}
 EOF
 chmod 600 visitor/.env
+
+# Деплой под root: контейнер non-root (10000), файлы — во владении 10000
+if [ "$root_deploy" = 1 ]; then
+  chown 10000:10000 vps/frps.toml vps/tls/* client/frpc.toml client/tls/* \
+                    visitor/visitor.toml visitor/tls/* 2>/dev/null || true
+fi
 
 # --- вывод ---
 if [ "$printed" = 1 ]; then

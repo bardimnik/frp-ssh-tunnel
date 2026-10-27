@@ -1,3 +1,8 @@
 bindPort = 7000
 auth.method = "token"
 auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
+
+transport.tls.force = true
+transport.tls.certFile = "/etc/frp/tls/server.crt"
+transport.tls.keyFile = "/etc/frp/tls/server.key"
+transport.tls.trustedCaFile = "/etc/frp/tls/ca.crt"
